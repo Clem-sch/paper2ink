@@ -1,0 +1,71 @@
+# --- Python -----------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# packaging / build artefacts
+build/
+dist/
+sdist/
+wheels/
+*.egg-info/
+*.egg
+.eggs/
+MANIFEST
+
+# virtual environments
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# test and type-checker caches
+.pytest_cache/
+.cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# --- paper2ink inputs and outputs -------------------------------------
+# Papers are copyrighted and large: keep them out of the repository.
+# tests/fixtures/papers is populated by scripts/fetch_test_papers.py.
+papers/
+tests/fixtures/papers/
+tests/fixtures/*.pdf
+out/
+
+# Conversion results and debug output, wherever they land.
+*.epub
+*.azw3
+*.mobi
+*-layout/
+paper2ink-*/
+
+# --dump-json writes the intermediate model next to the EPUB, so it is
+# covered by the output folders above rather than by a blanket *.json rule,
+# which would be too eager for a project that may want committed JSON later.
+
+# Local configuration overriding the committed example.
+paper2ink.toml
+
+# EPUBCheck, if unpacked into the project instead of onto PATH.
+epubcheck/
+epubcheck*.jar
+
+# --- editors and operating systems ------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini

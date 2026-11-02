@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paper2ink"
+version = "0.1.0"
+description = "Convert scientific papers in PDF form into reflowable, Kindle-friendly EPUB3"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "paper2ink contributors" }]
+keywords = ["pdf", "epub", "kindle", "e-ink", "papers", "docling"]
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Text Processing :: Markup",
+]
+dependencies = [
+    "pymupdf>=1.24",
+    "ebooklib>=0.18",
+    "typer>=0.12",
+    "rich>=13.0",
+    "pillow>=10.0",
+    "lxml>=5.0",
+]
+
+[project.optional-dependencies]
+docling = ["docling>=2.0"]
+pix2text = ["pix2text>=1.1"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+paper2ink = "paper2ink.cli:run"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+paper2ink = ["templates/*.css", "templates/*.xhtml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

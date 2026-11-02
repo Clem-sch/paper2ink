@@ -1,0 +1,38 @@
+# Copy to paper2ink.toml next to your PDFs, into the working directory, or
+# into %APPDATA%\paper2ink\ to change the defaults.  Command line options
+# always win over this file.
+
+[paper2ink]
+# Parser backend: "docling" (best layout analysis, downloads ML models on
+# first run), "pymupdf" (fast heuristics, no models) or "auto".
+parser = "auto"
+
+# Resolution of figure/table crops in dpi.  250 is a good compromise between
+# sharpness on a 300 ppi Kindle and file size.
+dpi = 250
+
+# Kindle screens are grayscale; keeping colour only inflates the file.
+color = false
+
+# "image" renders tables as cropped pictures (robust), "html" produces
+# reflowable tables (nicer when the table structure is detected correctly).
+tables = "image"
+
+# "off" or "latex".  LaTeX recognition only adds alt text, the displayed
+# formula stays an image either way, and it is slow on a CPU.
+formulas = "off"
+formula_backend = "docling"
+
+cover = true
+azw3 = false
+validate = true
+
+# Extra publisher boilerplate to strip, one regex per line, matched against
+# whole lines, case-insensitively.  By default these are *added* to the
+# built-in list; set boilerplate_extends_defaults = false to replace it.
+boilerplate_extends_defaults = true
+boilerplate = [
+    '^\s*ACS Paragon Plus Environment\s*$',
+    '^\s*Journal Pre-proof\s*$',
+    '^\s*This article is protected by copyright\b.*$',
+]

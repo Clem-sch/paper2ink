@@ -1,0 +1,134 @@
+/* paper2ink - deliberately minimal CSS for e-ink readers.
+   No embedded fonts, no fixed pixel sizes, no background colours: the
+   Kindle's own typography settings should win. */
+
+body {
+    margin: 0 0.4em;
+    text-align: justify;
+    widows: 2;
+    orphans: 2;
+}
+
+h1, h2, h3, h4 {
+    font-weight: bold;
+    text-align: left;
+    page-break-after: avoid;
+    line-height: 1.2;
+}
+
+h1 { font-size: 1.5em; margin: 1.2em 0 0.6em; }
+h2 { font-size: 1.25em; margin: 1.1em 0 0.5em; }
+h3 { font-size: 1.1em; margin: 1em 0 0.4em; }
+h4 { font-size: 1em; margin: 1em 0 0.3em; font-style: italic; }
+
+p {
+    margin: 0;
+    text-indent: 1.2em;
+    line-height: 1.4;
+}
+
+p.first, h1 + p, h2 + p, h3 + p, h4 + p {
+    text-indent: 0;
+}
+
+/* Links stay quiet: readers underline them anyway. */
+a, a:link, a:visited {
+    color: inherit;
+    text-decoration: none;
+    border-bottom: 1px dotted currentColor;
+}
+
+a.backlink, a.doi {
+    border-bottom: none;
+}
+
+/* -- title page -------------------------------------------------------- */
+.titlepage { text-align: left; }
+.titlepage h1 { font-size: 1.7em; margin-bottom: 0.4em; }
+.authors { font-style: italic; margin-bottom: 0.6em; text-indent: 0; }
+.pubinfo { font-size: 0.9em; margin-bottom: 1.4em; text-indent: 0; }
+
+.abstract {
+    margin: 1.2em 0.6em;
+    padding: 0.6em 0.8em;
+    border-top: 1px solid currentColor;
+    border-bottom: 1px solid currentColor;
+    font-size: 0.95em;
+}
+.abstract h2 { font-size: 1em; margin: 0 0 0.4em; }
+.abstract p { text-indent: 0; }
+
+/* -- figures and tables ------------------------------------------------ */
+section.asset {
+    page-break-before: always;
+    page-break-inside: avoid;
+    margin-bottom: 1.5em;
+}
+section.asset:first-of-type { page-break-before: auto; }
+
+figure {
+    margin: 0 0 0.5em;
+    text-align: center;
+    page-break-inside: avoid;
+}
+
+figure img {
+    max-width: 100%;
+    height: auto;
+}
+
+figcaption {
+    font-size: 0.85em;
+    text-align: left;
+    margin-top: 0.5em;
+    line-height: 1.3;
+}
+
+.asset-label { font-weight: bold; }
+
+.backlinks {
+    font-size: 0.8em;
+    text-align: left;
+    margin: 0.3em 0 0;
+    text-indent: 0;
+}
+
+/* -- equations --------------------------------------------------------- */
+p.equation {
+    text-align: center;
+    text-indent: 0;
+    margin: 0.8em 0;
+    page-break-inside: avoid;
+}
+p.equation img { max-width: 92%; height: auto; }
+
+/* -- reflowable tables ------------------------------------------------- */
+table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.8em;
+}
+th, td {
+    border: 1px solid currentColor;
+    padding: 0.2em 0.3em;
+    text-align: left;
+    vertical-align: top;
+}
+
+/* -- bibliography and notes -------------------------------------------- */
+.references p.reference {
+    margin: 0 0 0.5em 1.8em;
+    text-indent: -1.8em;      /* hanging indent, as papers set them */
+    font-size: 0.9em;
+    line-height: 1.3;
+}
+.refnum { font-weight: bold; }
+
+aside.footnote, .footnotes p {
+    font-size: 0.85em;
+    text-indent: 0;
+    margin-bottom: 0.4em;
+}
+.footnotes h2 { font-size: 1em; }
+
+ul.plain { list-style: none; padding-left: 0; }
