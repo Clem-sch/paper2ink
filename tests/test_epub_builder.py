@@ -180,3 +180,31 @@ def test_an_asset_without_an_image_still_renders_and_anchors(doc):
     assert 'id="tab-9"' in html
     assert "could not be extracted" in html
     assert "Measured values." in html
+
+
+def test_a_chapter_with_nothing_but_a_heading_is_dropped():
+    """"References" keeps its heading after the entries move to the
+    bibliography, which would leave a hollow chapter and a duplicate in
+    the table of contents."""
+    document = Document()
+    document.blocks = [
+        heading("h1", "1. Introduction"),
+        para("p1", "Some real content."),
+        heading("h2", "References"),
+    ]
+    builder = EpubBuilder(document)
+    builder._split_chapters()
+    assert [c.title for c in builder.chapters] == ["1. Introduction"]
+
+
+def test_a_short_chapter_with_content_is_kept():
+    document = Document()
+    document.blocks = [
+        heading("h1", "1. Introduction"),
+        para("p1", "Content."),
+        heading("h2", "Funding"),
+        para("p2", "Funded by a grant."),
+    ]
+    builder = EpubBuilder(document)
+    builder._split_chapters()
+    assert [c.title for c in builder.chapters] == ["1. Introduction", "Funding"]

@@ -35,6 +35,7 @@ PDF → parse (layout, reading order, block types)
 python -m venv .venv
 .venv\Scripts\activate            # Windows
 pip install -e .                   # core: PyMuPDF, ebooklib, Typer, Pillow
+pip install -e ".[gui]"            # add the web UI (FastAPI, a few MB)
 pip install -e ".[docling]"        # add the Docling parser (large download)
 pip install -e ".[pix2text]"       # add the pix2text formula recognizer
 pip install -e ".[dev]"            # pytest
@@ -46,7 +47,37 @@ layout models from Hugging Face **the first time it runs** — expect a few
 minutes and a few hundred megabytes on that first conversion. The download is
 logged; run with `-v` to watch it.
 
-## Use
+## The web UI
+
+```bash
+pip install -e ".[gui]"
+paper2ink-gui
+```
+
+That opens a browser on `http://127.0.0.1:8731/`. Drop PDFs on the page and
+they convert one at a time, with live progress. The interesting part is not
+the drop zone but what you get afterwards:
+
+**Review** puts the original PDF page beside everything paper2ink pulled out
+of it. Every block is outlined on the page — kept text in blue, figure and
+table regions in magenta, and **discarded text in red**. That last one is the
+point. Headers, page numbers and copyright lines are dropped on purpose, but
+so, occasionally, is a highlighted text box, because a box with a tinted
+background looks exactly like a figure to a layout heuristic. The sidebar
+lists any dropped passage that reads like prose rather than page furniture,
+so checking a paper takes a glance instead of a full read. Unresolved
+references are listed there too — usually supplementary figures that live in
+a separate file.
+
+**Read** renders the finished EPUB in the browser. An EPUB is XHTML plus CSS,
+so what you see is what the builder wrote, including the cross-reference
+links and the backlinks under each figure. It is not a Kindle simulator; it
+is there to check the book end to end before sending it.
+
+The server binds to localhost and has no authentication, so keep it there.
+`--port` moves it, `--no-browser` suppresses the browser window.
+
+## Use from the command line
 
 ```bash
 paper2ink paper.pdf                       # EPUB next to the PDF
@@ -136,6 +167,13 @@ Reference lists survive PDF extraction worse than anything else, so
 3. a list the parser already split into items with the markers stripped,
    which is what Docling hands over — recognised as a run of list items that
    closes the document and mostly carries years, then numbered by order.
+
+Entries are numbered in square brackets (Wiley), parentheses (ACS) or with a
+bare digit (RSC: "4 L. Fenno, Annu. Rev. Neurosci., 2011, 34, 389"). The bare
+form is the awkward one, since a reference is full of bare numbers already,
+so it only counts after a full stop and before a capital. Every candidate run
+then has to look like sources rather than a numbered procedure: at least five
+entries, a sensible average length, and a year in most of them.
 
 Author-year entries are recognised by the parenthesised year rather than by
 the author list: surnames carry particles ("de Jong"), non-ASCII initials
@@ -244,6 +282,10 @@ src/paper2ink/
   epub_builder.py   # EPUB3 assembly
   validate.py       # internal checks and EPUBCheck
   templates/        # CSS
+  gui/              # the local web UI
+    server.py       #   routes: jobs, review data, page images, the book
+    jobs.py         #   one conversion at a time, in a worker thread
+    static/         #   the single page, no framework and no build step
 ```
 
 The library knows nothing about the CLI, so a GUI can call
@@ -274,10 +316,10 @@ The library knows nothing about the CLI, so a GUI can call
 
 ## Later
 
-Not built yet, but nothing in the architecture is in the way: a GUI
-(drag-and-drop), sending straight to a Send-to-Kindle address, further parser
-backends (GROBID, Marker, MinerU), and optionally repeating each figure after
-the paragraph that first mentions it.
+Not built yet, but nothing in the architecture is in the way: sending
+straight to a Send-to-Kindle address, further parser backends (GROBID,
+Marker, MinerU), linking footnote markers in the body text, and optionally
+repeating each figure after the paragraph that first mentions it.
 
 ## Licence
 

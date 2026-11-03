@@ -161,6 +161,51 @@ class Footnote:
 
 
 @dataclass
+class DroppedBlock:
+    """Text the pipeline threw away, kept so a reviewer can check on it.
+
+    Every stage that discards text records it here with a reason.  Most
+    drops are correct (running heads, page numbers, publisher boilerplate),
+    but a highlighted text box or a footnote can look exactly like one, and
+    silently losing those is the failure mode that is hardest to notice.
+    """
+
+    reason: str          # see DROP_REASONS
+    text: str
+    page: int = 0
+    bbox: BBox | None = None
+
+    @property
+    def is_suspicious(self) -> bool:
+        """Whether this drop deserves a second look.
+
+        Only two reasons can swallow real content: text inside a graphic
+        (a highlighted box reads as a figure to the layout heuristics) and
+        an over-eager boilerplate pattern.  Running heads and journal front
+        matter are page furniture and practically never body text, so they
+        are not flagged however long they are.
+
+        Within those two, a long passage or one ending in a full stop reads
+        like prose rather than an axis label.
+        """
+        if self.reason not in ("inside graphic", "boilerplate"):
+            return False
+        stripped = self.text.strip()
+        return len(stripped) > 60 or stripped.endswith((".", "!", "?"))
+
+
+#: Reasons blocks get dropped, in the order the pipeline applies them.
+DROP_REASONS = (
+    "running head",      # repeats in the header/footer band on most pages
+    "front matter",      # journal metadata on the first page
+    "inside graphic",    # text sitting inside a figure, cropped with it
+    "label value",       # the value belonging to a "KEYWORDS" style label
+    "boilerplate",       # matched a publisher boilerplate pattern
+    "page number",       # a bare number on its own line
+)
+
+
+@dataclass
 class Metadata:
     title: str = ""
     authors: list[str] = field(default_factory=list)
@@ -194,6 +239,10 @@ class Document:
     references: list[Reference] = field(default_factory=list)
     footnotes: list[Footnote] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    dropped: list[DroppedBlock] = field(default_factory=list)
+    #: Reference targets the text mentions but the document does not hold,
+    #: as key -> number of mentions.  Filled in by the EPUB builder.
+    unresolved: dict[str, int] = field(default_factory=dict)
 
     # -- convenience views -------------------------------------------------
     @property
@@ -219,6 +268,18 @@ class Document:
             if block.id == block_id:
                 return block
         return None
+
+    @property
+    def suspicious_drops(self) -> list[DroppedBlock]:
+        """Dropped text that looks like prose rather than page furniture."""
+        return [drop for drop in self.dropped if drop.is_suspicious]
+
+    def drop(
+        self, reason: str, text: str, page: int = 0, bbox: "BBox | None" = None
+    ) -> None:
+        """Record that *text* was discarded, so a reviewer can check it."""
+        if text.strip():
+            self.dropped.append(DroppedBlock(reason, text, page, bbox))
 
     def add_warning(self, message: str) -> None:
         if message not in self.warnings:
@@ -256,6 +317,12 @@ class Document:
             doc.references.append(Reference(**raw))
         for raw in data.get("footnotes", []):
             doc.footnotes.append(Footnote(**raw))
+        doc.unresolved = dict(data.get("unresolved", {}))
+        for raw in data.get("dropped", []):
+            raw = dict(raw)
+            bbox = raw.get("bbox")
+            raw["bbox"] = BBox(**bbox) if bbox else None
+            doc.dropped.append(DroppedBlock(**raw))
         return doc
 
     @classmethod

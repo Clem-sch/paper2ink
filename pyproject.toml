@@ -26,18 +26,26 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+gui = ["fastapi>=0.110", "uvicorn>=0.27", "python-multipart>=0.0.9"]
 docling = ["docling>=2.0"]
 pix2text = ["pix2text>=1.1"]
 dev = ["pytest>=8.0"]
 
 [project.scripts]
 paper2ink = "paper2ink.cli:run"
+paper2ink-gui = "paper2ink.gui.cli:run"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-paper2ink = ["templates/*.css", "templates/*.xhtml"]
+paper2ink = [
+    "templates/*.css",
+    "templates/*.xhtml",
+    "gui/static/*.html",
+    "gui/static/*.css",
+    "gui/static/*.js",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

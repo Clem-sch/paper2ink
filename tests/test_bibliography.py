@@ -254,3 +254,63 @@ def test_no_list_items_at_all():
     doc = Document()
     doc.blocks = body()
     assert harvest_list_bibliography(doc) == []
+
+
+# --------------------------------------------------------------------------
+# RSC style: bare numbers, no brackets
+# --------------------------------------------------------------------------
+
+
+def test_bare_numbered_entries_are_split():
+    """RSC prints "4 L. Fenno, Annu. Rev. Neurosci., 2011, 34, 389-412."."""
+    doc = Document()
+    doc.blocks = body() + [
+        block(
+            "r1",
+            "1 C. Brieke, F. Rohrbach and A. Heckel, Angew. Chem., 2012, 51, 8446. "
+            "2 M. Shaaya and J. Fauser, Nat. Commun., 2020, 11, 1. "
+            "3 L. Fenno, O. Yizhar and K. Deisseroth, Annu. Rev. Neurosci., "
+            "2011, 34, 389. "
+            "4 V. Eikemo and B. Holmelid, J. Org. Chem., 2022, 87, 8034. "
+            "5 I. Elamri and C. Radzewicz, Chem. Sci., 2021, 12, 100.",
+        ),
+    ]
+    entries = harvest_numeric_bibliography(doc)
+    assert [e.number for e in entries] == ["1", "2", "3", "4", "5"]
+    assert entries[2].raw.startswith("L. Fenno")
+    assert entries[2].year == "2011"
+
+
+def test_volume_and_page_numbers_do_not_split_an_entry():
+    """"2011, 34, 389" must not look like three new entries."""
+    doc = Document()
+    doc.blocks = body() + [
+        block(
+            "r1",
+            "1 A. Author, J. Chem., 2011, 34, 389. "
+            "2 B. Writer, J. Phys., 2015, 120, 1473. "
+            "3 C. Third, Nature, 2019, 7, 42. "
+            "4 D. Fourth, Science, 2020, 11, 8. "
+            "5 E. Fifth, Cell, 2021, 3, 99.",
+        ),
+    ]
+    entries = harvest_numeric_bibliography(doc)
+    assert len(entries) == 5
+    assert "34, 389" in entries[0].raw
+
+
+def test_a_numbered_procedure_is_not_a_bibliography():
+    """Steps have no years, so the year guard keeps them out."""
+    doc = Document()
+    doc.blocks = body() + [
+        block(
+            "r1",
+            "1 Rinse the membrane with buffer and let it settle. "
+            "2 Apply the voltage ramp until rupture occurs. "
+            "3 Record the current trace for five minutes. "
+            "4 Wash the chamber twice with fresh buffer. "
+            "5 Repeat the measurement with the second sample.",
+        ),
+    ]
+    assert harvest_numeric_bibliography(doc) == []
+    assert len(doc.blocks) == 13

@@ -201,6 +201,17 @@ def strip_boilerplate(text: str, patterns: list[re.Pattern[str]]) -> str:
     return "\n".join(kept)
 
 
+def _removed_lines(original: str, kept: str) -> str:
+    """The lines that boilerplate stripping took out of a block."""
+    survivors = {line.strip() for line in kept.splitlines() if line.strip()}
+    gone = [
+        line.strip()
+        for line in original.splitlines()
+        if line.strip() and line.strip() not in survivors
+    ]
+    return " ".join(gone)
+
+
 def is_line_number(text: str) -> bool:
     return bool(_LINE_NUMBER_RE.match(text))
 
@@ -297,10 +308,18 @@ def clean_document(doc: Document, config: CleanupConfig | None = None) -> Docume
 
     cleaned: list[Block] = []
     for block in doc.blocks:
-        text = normalize_text(strip_boilerplate(block.text, patterns))
+        original = block.text
+        text = normalize_text(strip_boilerplate(original, patterns))
+        if text != normalize_text(original):
+            # Record what the boilerplate patterns took out, so a reviewer
+            # can tell a copyright line from a lost paragraph.
+            removed = _removed_lines(original, text)
+            if removed:
+                doc.drop("boilerplate", removed, block.page, block.bbox)
         if not text:
             continue
         if block.type == "paragraph" and is_line_number(text):
+            doc.drop("page number", text, block.page, block.bbox)
             continue
         block.text = text
         cleaned.append(block)

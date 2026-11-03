@@ -164,6 +164,11 @@ class EpubBuilder:
         epub.write_epub(str(out_path), book, {})
 
         linker = self.linker
+        if linker is not None:
+            # Keep the unresolved targets on the document: the review view
+            # needs to know *which* references point nowhere, not just how
+            # many.
+            self.doc.unresolved = dict(linker.unresolved)
         return BuildResult(
             path=out_path,
             chapters=len(self.chapters),
@@ -191,7 +196,15 @@ class EpubBuilder:
             if block.type == "heading" and block.level <= 1 and not current.blocks:
                 current.title = block.text[:90]
             current.blocks.append(block)
-        self.chapters = [c for c in chapters if c.blocks]
+        # A heading whose content was lifted elsewhere - "References", whose
+        # entries now live in the bibliography - would otherwise leave a
+        # hollow chapter in the book and a duplicate in the table of
+        # contents.
+        self.chapters = [
+            chapter
+            for chapter in chapters
+            if chapter.blocks and not _is_hollow(chapter)
+        ]
 
     def _collect_section_anchors(self) -> None:
         """Record which file holds each numbered section and each equation."""
@@ -493,6 +506,11 @@ class EpubBuilder:
             book.add_metadata("DC", "identifier", f"https://doi.org/{meta.doi}")
         # ebooklib writes the required dcterms:modified itself; adding a
         # second one makes EPUBCheck fail (RSC-005).
+
+
+def _is_hollow(chapter: _Chapter) -> bool:
+    """A chapter that is nothing but headings carries no text to read."""
+    return all(block.type in ("heading", "caption") for block in chapter.blocks)
 
 
 def _ordered_references(references: list) -> list:

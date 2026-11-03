@@ -130,7 +130,7 @@ class PyMuPDFParser(BaseParser):
             pages = [self._read_page(pdf[i]) for i in range(pdf.page_count)]
             heads = self._running_heads(pages)
             self._apply_metadata(doc, pdf, pages, heads)
-            ordered = self._ordered_blocks(pages, heads)
+            ordered = self._ordered_blocks(doc, pages, heads)
             self._build_blocks(doc, ordered, pages)
             self._attach_assets(doc, pages)
         return doc
@@ -236,22 +236,27 @@ class PyMuPDFParser(BaseParser):
         return detect_running_heads(candidates)
 
     def _ordered_blocks(
-        self, pages: list[_PageInfo], heads: set[str]
+        self, doc: Document, pages: list[_PageInfo], heads: set[str]
     ) -> list[_TextBlock]:
         ordered: list[_TextBlock] = []
         for info in pages:
             keep = []
             for block in info.blocks:
-                dropped = head_signature(" ".join(block.lines)) in heads or (
-                    _is_front_matter(block, info)
-                )
-                if dropped:
+                if head_signature(" ".join(block.lines)) in heads:
                     info.excluded.append(block.rect)
+                    doc.drop("running head", block.text, block.page, block.bbox)
+                    continue
+                if _is_front_matter(block, info):
+                    info.excluded.append(block.rect)
+                    doc.drop("front matter", block.text, block.page, block.bbox)
                     continue
                 if _is_inside_graphic(block, info):
+                    doc.drop("inside graphic", block.text, block.page, block.bbox)
                     continue
                 keep.append(block)
-            ordered.extend(_drop_label_values(_reading_order(keep, info), info))
+            ordered.extend(
+                _drop_label_values(doc, _reading_order(keep, info), info)
+            )
         return ordered
 
     # -- block classification ---------------------------------------------
@@ -684,7 +689,7 @@ def _is_front_matter(block: _TextBlock, info: _PageInfo) -> bool:
 
 
 def _drop_label_values(
-    blocks: list[_TextBlock], info: _PageInfo
+    doc: Document, blocks: list[_TextBlock], info: _PageInfo
 ) -> list[_TextBlock]:
     """Drop "KEYWORDS" style labels together with the block that follows."""
     if info.number != 0:
@@ -694,9 +699,11 @@ def _drop_label_values(
     for block in blocks:
         if skip_next:
             skip_next = False
+            doc.drop("label value", block.text, block.page, block.bbox)
             continue
         if FRONT_MATTER_LABEL_RE.match(block.text):
             skip_next = True
+            doc.drop("front matter", block.text, block.page, block.bbox)
             continue
         out.append(block)
     return out
@@ -1033,6 +1040,7 @@ def _extract_references(doc: Document) -> None:
         return
 
     seen: set[str] = set()
+    consumed: set[str] = set()
     auto_number = 0
 
     def add(number: str, raw: str) -> None:
@@ -1048,6 +1056,7 @@ def _extract_references(doc: Document) -> None:
         text = block.text.strip()
         if not text:
             continue
+        consumed.add(block.id)
         if is_bracketed_reference_run(text):
             for number, raw in split_bracketed_references(text):
                 add(number, raw)
@@ -1060,3 +1069,7 @@ def _extract_references(doc: Document) -> None:
             add(str(auto_number), text)
 
     doc.references = entries
+    if entries:
+        # The bibliography gets its own chapter, so the entries must not
+        # also stay in the running text.
+        doc.blocks = [block for block in doc.blocks if block.id not in consumed]

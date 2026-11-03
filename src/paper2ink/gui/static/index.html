@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>paper2ink</title>
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<header>
+  <h1>paper2ink</h1>
+  <p class="tagline">Scientific PDFs &rarr; Kindle-ready EPUB3</p>
+</header>
+
+<main>
+  <!-- ------------------------------------------------- drop zone -->
+  <section id="dropzone" class="dropzone">
+    <p class="dz-main">Drop PDFs here</p>
+    <p class="dz-sub">or <button type="button" id="pick">choose files</button></p>
+    <input type="file" id="file" accept="application/pdf,.pdf" multiple hidden />
+
+    <details class="options">
+      <summary>Conversion options</summary>
+      <div class="option-grid">
+        <label>Parser
+          <select id="opt-parser">
+            <option value="pymupdf" selected>pymupdf &mdash; fast, no models</option>
+            <option value="docling">docling &mdash; slower, ML layout</option>
+            <option value="auto">auto</option>
+          </select>
+        </label>
+        <label>Figure resolution
+          <select id="opt-dpi">
+            <option value="150">150 dpi</option>
+            <option value="250" selected>250 dpi</option>
+            <option value="300">300 dpi</option>
+            <option value="400">400 dpi</option>
+          </select>
+        </label>
+        <label>Tables
+          <select id="opt-tables">
+            <option value="image" selected>as images</option>
+            <option value="html">reflowable HTML</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="opt-color" /> keep colour</label>
+        <label class="check"><input type="checkbox" id="opt-cover" checked /> generate cover</label>
+      </div>
+    </details>
+  </section>
+
+  <!-- ------------------------------------------------- job list -->
+  <section id="jobs"></section>
+</main>
+
+<!-- ------------------------------------------------- detail overlay -->
+<div id="overlay" class="overlay" hidden>
+  <div class="overlay-head">
+    <strong id="ov-title">&nbsp;</strong>
+    <nav class="tabs">
+      <button data-tab="review" class="active">Review</button>
+      <button data-tab="read">Read</button>
+    </nav>
+    <button id="ov-close" class="close" title="Close">&times;</button>
+  </div>
+
+  <!-- review: PDF page beside what was extracted from it -->
+  <div id="tab-review" class="tab-panel">
+    <aside class="pagelist">
+      <div class="findings" id="findings"></div>
+      <ol id="pagenums"></ol>
+    </aside>
+    <div class="compare">
+      <div class="pane pdf-pane">
+        <div class="pane-head">
+          <span>PDF page <b id="pagelabel">1</b></span>
+          <span class="legend">
+            <i class="sw kept"></i>kept
+            <i class="sw asset"></i>figure
+            <i class="sw dropped"></i>dropped
+          </span>
+        </div>
+        <div class="pagebox" id="pagebox">
+          <img id="pageimg" alt="" />
+          <div id="boxes"></div>
+        </div>
+      </div>
+      <div class="pane text-pane">
+        <div class="pane-head"><span>Extracted from this page</span></div>
+        <div id="extracted"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- read: the finished book, rendered by the browser itself -->
+  <div id="tab-read" class="tab-panel" hidden>
+    <aside class="pagelist">
+      <ol id="chapters"></ol>
+    </aside>
+    <iframe id="book" title="EPUB contents"></iframe>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

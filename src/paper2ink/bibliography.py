@@ -35,6 +35,14 @@ BRACKET_MARKER_RE = re.compile(r"\[(\d{1,3})\]\s*")
 _MARKER_STYLES: dict[str, tuple[re.Pattern[str], re.Pattern[str]]] = {
     "bracket": (BRACKET_MARKER_RE, re.compile(r"\[1\]\s")),
     "paren": (re.compile(r"\((\d{1,3})\)\s"), re.compile(r"\(1\)\s")),
+    # RSC numbers entries with a bare digit: "4 L. Fenno, Annu. Rev. ...".
+    # Bare numbers are everywhere in a reference list ("2011, 34, 389"), so
+    # the marker only counts after a full stop and before a capital, which
+    # is where the previous entry ended and the next author begins.
+    "bare": (
+        re.compile(r"(?:^|(?<=\.))\s*(\d{1,3})\s+(?=[A-Z])"),
+        re.compile(r"(?:^|(?<=\.))\s*1\s+(?=[A-Z])"),
+    ),
 }
 
 #: References are long; an "entry" far shorter than this is an equation
@@ -49,6 +57,11 @@ ENTRY_MARKER_RE = re.compile(r"^\s*(?:\[(\d{1,3})\]|\((\d{1,3})\)|(\d{1,3})[.)])
 #: ("de Jong"), non-ASCII initials ("Stefl") and corporate names ("Blender
 #: Online Community"), none of which fit a tidy pattern.
 AUTHOR_YEAR_ENTRY_RE = re.compile(r"^.{0,250}?\((?:19|20)\d{2}[a-z]?\)")
+
+#: Share of the entries that must carry a four-digit year.
+_YEAR_SHARE = 0.7
+
+_YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
 
 #: A bibliography must have at least this many entries to be believed.
 _MIN_ENTRIES = 5
@@ -115,6 +128,10 @@ def harvest_numeric_bibliography(doc: Document) -> list[Reference]:
     if mean_length < _MIN_MEAN_ENTRY_LENGTH:
         # Numbered equations, not a bibliography.
         return []
+    with_year = sum(1 for _, raw in pairs if _YEAR_RE.search(raw))
+    if with_year < len(pairs) * _YEAR_SHARE:
+        # Sources carry years; a run of numbered list items does not.
+        return []
 
     # The bibliography may start part-way into a block; keep what came before
     # it as ordinary text.
@@ -146,10 +163,6 @@ _NOISE_LENGTH = 80
 #: Blocks allowed after the last list item before the run stops counting as
 #: the closing bibliography.
 _TRAILING_SLACK = 3
-#: Share of the entries that must carry a four-digit year.
-_YEAR_SHARE = 0.7
-
-_YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
 
 
 def harvest_list_bibliography(doc: Document) -> list[Reference]:
