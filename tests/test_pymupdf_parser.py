@@ -79,3 +79,26 @@ def test_a_line_without_superscripts_is_unchanged():
 
 def test_empty_span_list():
     assert _join_spans([]) == ""
+
+
+# --------------------------------------------------------------------------
+# affiliation markers on author lines
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("Jan A. Stevens[1]", "Jan A. Stevens"),      # digits, already bracketed
+        ("[1,2]Fabian Gr\u00fcnewald", "Fabian Gr\u00fcnewald"),
+        ("\u2020 Manuel Sparta", "Manuel Sparta"),     # ACS daggers lead the name
+        ("Manoj K. Kesharwani,\u2021", "Manoj K. Kesharwani"),
+        ("\u2021a Lucia Rojas", "Lucia Rojas"),        # RSC: symbol plus a letter
+        ("Frank Neese*", "Frank Neese"),
+        ("Edo Vreeker", "Edo Vreeker"),                # nothing to strip
+    ],
+)
+def test_affiliation_markers_are_stripped_from_author_names(raw, expected):
+    from paper2ink.parsers.pymupdf_parser import _strip_markers
+
+    assert _strip_markers(raw) == expected

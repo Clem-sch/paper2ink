@@ -8,6 +8,7 @@ itself) and rendered PDF pages for the review view.
 from __future__ import annotations
 
 import logging
+import re
 import tempfile
 from contextlib import asynccontextmanager
 import webbrowser
@@ -19,8 +20,16 @@ from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from ..library import SORT_FIELDS, Library
 from ..model import Document
 from ..pipeline import ConversionSettings
+from ..settings import (
+    Settings,
+    config_dir,
+    load_settings,
+    save_settings,
+    settings_path,
+)
 from .jobs import PAGE_DPI, Job, JobStore
 
 log = logging.getLogger("paper2ink.gui")
@@ -67,9 +76,14 @@ def create_app(store: JobStore | None = None) -> FastAPI:
     app = FastAPI(
         title="paper2ink", docs_url=None, redoc_url=None, lifespan=_lifespan
     )
-    app.state.store = store or JobStore(
-        Path(tempfile.mkdtemp(prefix="paper2ink-gui-"))
-    )
+    if store is None:
+        user_settings = load_settings()
+        store = JobStore(
+            Path(tempfile.mkdtemp(prefix="paper2ink-gui-")),
+            library=Library(config_dir() / "library.sqlite3"),
+            settings=user_settings,
+        )
+    app.state.store = store
 
     # -- the page ----------------------------------------------------------
     @app.get("/", response_class=HTMLResponse)
@@ -82,12 +96,16 @@ def create_app(store: JobStore | None = None) -> FastAPI:
     @app.post("/api/jobs")
     async def create_job(
         file: UploadFile,
-        parser: str = Form("pymupdf"),
-        dpi: int = Form(250),
+        parser: str = Form(""),
+        dpi: int = Form(0),
         color: bool = Form(False),
-        tables: str = Form("image"),
+        tables: str = Form(""),
         cover: bool = Form(True),
     ) -> JSONResponse:
+        defaults = _store(app).settings
+        parser = parser or defaults.parser
+        dpi = dpi or defaults.dpi
+        tables = tables or defaults.tables
         data = await file.read()
         if not data:
             raise HTTPException(400, "the uploaded file is empty")
@@ -106,6 +124,7 @@ def create_app(store: JobStore | None = None) -> FastAPI:
             color=color,
             tables=tables,
             cover=cover,
+            validate=defaults.validate,
         )
         job = _store(app).create(file.filename or "paper.pdf", data, settings)
         return JSONResponse(job.summary(), status_code=201)
@@ -159,6 +178,161 @@ def create_app(store: JobStore | None = None) -> FastAPI:
         media = _MEDIA_TYPES.get(target.suffix.lower(), "application/octet-stream")
         return FileResponse(target, media_type=media)
 
+    # -- settings ----------------------------------------------------------
+    @app.get("/api/settings")
+    def read_settings() -> dict[str, Any]:
+        settings = _store(app).settings
+        return {
+            **settings.to_dict(),
+            "path": str(settings_path()),
+            "output_exists": settings.output_path.is_dir(),
+        }
+
+    @app.put("/api/settings")
+    def write_settings(payload: dict[str, Any]) -> dict[str, Any]:
+        store = _store(app)
+        settings = store.settings
+        email = str(payload.get("kindle_email", settings.kindle_email)).strip()
+        if email and not _looks_like_email(email):
+            raise HTTPException(400, "that does not look like an e-mail address")
+        settings.kindle_email = email
+
+        output = str(payload.get("output_dir", settings.output_dir)).strip()
+        if output:
+            try:
+                target = Path(output).expanduser()
+                target.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise HTTPException(400, f"cannot use that folder: {exc}") from exc
+            settings.output_dir = str(target)
+
+        for key, allowed in (
+            ("parser", ("auto", "pymupdf", "docling")),
+            ("tables", ("image", "html")),
+        ):
+            if key in payload:
+                value = str(payload[key])
+                if value not in allowed:
+                    raise HTTPException(400, f"unknown {key}")
+                setattr(settings, key, value)
+        if "dpi" in payload:
+            settings.dpi = max(72, min(600, int(payload["dpi"])))
+        for flag in ("color", "cover", "validate"):
+            if flag in payload:
+                setattr(settings, flag, bool(payload[flag]))
+
+        save_settings(settings)
+        return {**settings.to_dict(), "path": str(settings_path())}
+
+    # -- the shelf ---------------------------------------------------------
+    @app.get("/api/library")
+    def library_list(
+        search: str = "",
+        sent: str = "",
+        starred: str = "",
+        parser: str = "",
+        year: str = "",
+        sort: str = "created",
+        order: str = "desc",
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        store = _store(app)
+        entries = store.library.list(
+            search=search,
+            sent=_tristate(sent),
+            starred=True if starred == "yes" else None,
+            parser=parser,
+            year=year,
+            sort=sort,
+            descending=order != "asc",
+            limit=limit,
+        )
+        return {
+            "entries": [entry.to_dict() for entry in entries],
+            "stats": store.library.stats(),
+            "sort_fields": list(SORT_FIELDS),
+            "parsers": store.library.known_values("parser"),
+            "years": store.library.known_values("year"),
+        }
+
+    @app.post("/api/library/{entry_id}/sent")
+    def set_sent(entry_id: int, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        sent = True if payload is None else bool(payload.get("sent", True))
+        if not _store(app).library.mark_sent(entry_id, sent):
+            raise HTTPException(404, "no such entry")
+        return _entry_or_404(app, entry_id)
+
+    @app.post("/api/library/{entry_id}/starred")
+    def set_starred(entry_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        if not _store(app).library.set_starred(entry_id, bool(payload.get("starred"))):
+            raise HTTPException(404, "no such entry")
+        return _entry_or_404(app, entry_id)
+
+    @app.delete("/api/library/{entry_id}")
+    def delete_entry(entry_id: int, remove_file: bool = False) -> dict[str, bool]:
+        store = _store(app)
+        entry = store.library.get(entry_id)
+        if entry is None:
+            raise HTTPException(404, "no such entry")
+        if remove_file and entry.epub_exists:
+            try:
+                Path(entry.epub_path).unlink()
+            except OSError as exc:
+                raise HTTPException(500, f"could not delete the file: {exc}") from exc
+        return {"deleted": store.library.delete(entry_id)}
+
+    @app.post("/api/library/forget-missing")
+    def forget_missing() -> dict[str, int]:
+        return {"removed": _store(app).library.forget_missing()}
+
+    @app.get("/api/library/{entry_id}/epub")
+    def download_entry(entry_id: int) -> FileResponse:
+        entry = _store(app).library.get(entry_id)
+        if entry is None or not entry.epub_exists:
+            raise HTTPException(404, "that book is no longer on disk")
+        return FileResponse(
+            entry.epub_path,
+            media_type="application/epub+zip",
+            filename=Path(entry.epub_path).name,
+        )
+
+    # -- sending -----------------------------------------------------------
+    @app.post("/api/library/{entry_id}/send")
+    def send_entry(entry_id: int) -> dict[str, Any]:
+        """Prepare a Send-to-Kindle mail and show the user the file.
+
+        A ``mailto:`` link cannot carry an attachment - mail clients refuse
+        that - so the draft is opened pre-addressed and the folder holding
+        the EPUB is revealed, leaving one drag to the user.
+        """
+        store = _store(app)
+        entry = store.library.get(entry_id)
+        if entry is None:
+            raise HTTPException(404, "no such entry")
+        if not entry.epub_exists:
+            raise HTTPException(404, "that book is no longer on disk")
+        if not store.settings.kindle_email:
+            raise HTTPException(
+                400, "no Send-to-Kindle address is set; add one in Settings"
+            )
+
+        subject = entry.title or Path(entry.epub_path).stem
+        url = store.settings.mailto_url(subject[:120])
+        revealed = _reveal(Path(entry.epub_path))
+        return {
+            "mailto": url,
+            "file": entry.epub_path,
+            "folder": str(Path(entry.epub_path).parent),
+            "revealed": revealed,
+        }
+
+    @app.post("/api/library/{entry_id}/reveal")
+    def reveal_entry(entry_id: int) -> dict[str, Any]:
+        entry = _store(app).library.get(entry_id)
+        if entry is None or not entry.epub_exists:
+            raise HTTPException(404, "that book is no longer on disk")
+        return {"revealed": _reveal(Path(entry.epub_path))}
+
     @app.get("/api/jobs/{job_id}/reader")
     def reader_entry(job_id: str) -> dict[str, Any]:
         """Where the reader should start, and the chapter list."""
@@ -177,6 +351,47 @@ def create_app(store: JobStore | None = None) -> FastAPI:
 
 def _store(app: FastAPI) -> JobStore:
     return app.state.store
+
+
+def _entry_or_404(app: FastAPI, entry_id: int) -> dict[str, Any]:
+    entry = _store(app).library.get(entry_id)
+    if entry is None:
+        raise HTTPException(404, "no such entry")
+    return entry.to_dict()
+
+
+def _tristate(value: str) -> bool | None:
+    """Turn a "yes"/"no"/"" query parameter into True/False/None."""
+    return {"yes": True, "no": False}.get(value)
+
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _looks_like_email(value: str) -> bool:
+    return bool(_EMAIL_RE.match(value))
+
+
+def _reveal(path: Path) -> bool:
+    """Open the folder holding *path* in the system file manager.
+
+    This runs on the user's own machine, which is the only reason it can
+    be done at all: a browser cannot open Explorer.
+    """
+    import subprocess
+    import sys
+
+    try:
+        if sys.platform == "win32":
+            subprocess.Popen(["explorer", "/select,", str(path)])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", str(path)])
+        else:
+            subprocess.Popen(["xdg-open", str(path.parent)])
+        return True
+    except (OSError, ValueError) as exc:  # pragma: no cover - platform specific
+        log.warning("could not reveal %s: %s", path, exc)
+        return False
 
 
 def _job(app: FastAPI, job_id: str) -> Job:

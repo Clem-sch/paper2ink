@@ -27,6 +27,7 @@ from ..cleanup import (
     FRONT_MATTER_LABEL_RE,
     FRONT_MATTER_RE,
     detect_running_heads,
+    guess_year,
     head_signature,
     heading_key,
     join_lines,
@@ -215,7 +216,7 @@ class PyMuPDFParser(BaseParser):
             meta.journal = _journal_from_running_heads(pages, heads) or _guess_journal(
                 first
             )
-            meta.year = _guess_year(full_text)
+            meta.year = guess_year(full_text)
         if not meta.authors:
             author = pdf_meta.get("author") or ""
             meta.authors = [a for a in _AUTHOR_SPLIT_RE.split(author) if a.strip()]
@@ -927,6 +928,23 @@ def _merge_duplicate_assets(doc: Document) -> None:
 # --------------------------------------------------------------------------
 
 
+#: Affiliation markers around a name.  Digits arrive bracketed, because
+#: superscripts have already been rewritten for citations; the symbols
+#: ACS and RSC use lead the *next* name rather than trailing the previous
+#: one, so both ends have to be cleaned.
+_AUTHOR_MARKER = (
+    r"(?:\[[\d,\s−–-]+\]|[\d*†‡§¶#∥¶])"
+)
+_LEADING_MARKERS_RE = re.compile(rf"^(?:{_AUTHOR_MARKER}|[a-z](?![a-z])|[,\s])+")
+_TRAILING_MARKERS_RE = re.compile(rf"(?:{_AUTHOR_MARKER}|[,\s])+$")
+
+
+def _strip_markers(part: str) -> str:
+    """Remove affiliation markers from both ends of an author name."""
+    part = _LEADING_MARKERS_RE.sub("", part)
+    return _TRAILING_MARKERS_RE.sub("", part).strip()
+
+
 def _guess_authors(info: _PageInfo, title_block: _TextBlock | None) -> list[str]:
     if title_block is None:
         return []
@@ -948,10 +966,10 @@ def _guess_authors(info: _PageInfo, title_block: _TextBlock | None) -> list[str]
             continue
         if re.search(r"\babstract\b", text, re.IGNORECASE):
             continue
-        parts = [
-            re.sub(r"[\d*†‡§¶#,]+$", "", p).strip()
-            for p in _AUTHOR_SPLIT_RE.split(text)
-        ]
+        # Affiliation markers are superscripts, so _join_spans has already
+        # turned them into "[1]" the way it does for citations.  On an
+        # author line they are neither, and have to come off again.
+        parts = [_strip_markers(p) for p in _AUTHOR_SPLIT_RE.split(text)]
         parts = [p for p in parts if 3 <= len(p) <= 60 and " " in p]
         upper = sum(1 for p in parts if p[:1].isupper())
         if parts and upper >= max(1, int(len(parts) * 0.8)):
@@ -1003,6 +1021,16 @@ def _journal_candidate(text: str) -> str | None:
             break
         words.append(word)
     candidate = " ".join(words).strip(" .,|-")
+    # Running heads often append the article type: "The Journal of Physical
+    # Chemistry A Article".
+    candidate = re.sub(
+        r"\s+(?:article|review|perspective|communication|letter|editorial|"
+        r"paper|research\s+article)$",
+        "",
+        candidate,
+        flags=re.IGNORECASE,
+    ).strip(" .,|-")
+    words = candidate.split()
     if not 6 <= len(candidate) <= 70 or len(words) < 2:
         return None
     letters = sum(1 for ch in candidate if ch.isalpha())
@@ -1027,9 +1055,6 @@ def _guess_journal(info: _PageInfo) -> str | None:
     return None
 
 
-def _guess_year(text: str) -> str | None:
-    years = re.findall(r"\b(19[89]\d|20[0-4]\d)\b", text)
-    return max(years) if years else None
 
 
 def _extract_references(doc: Document) -> None:

@@ -52,6 +52,74 @@
 
   <!-- ------------------------------------------------- job list -->
   <section id="jobs"></section>
+
+  <!-- ------------------------------------------------- the shelf -->
+  <section class="shelf">
+    <div class="shelf-head">
+      <h2>Library <span id="shelf-stats" class="muted"></span></h2>
+      <button type="button" id="settings-toggle">Settings</button>
+    </div>
+
+    <form id="settings" class="settings" hidden>
+      <label>Send-to-Kindle address
+        <input type="email" id="set-email" placeholder="you_abc123@kindle.com" />
+        <small>From your Amazon account, under "Preferences &rarr; Personal
+          Document Settings". The sender address you mail from has to be on
+          your approved list there.</small>
+      </label>
+      <label>Output folder
+        <input type="text" id="set-output" />
+        <small id="set-output-note"></small>
+      </label>
+      <div class="option-grid">
+        <label>Default parser
+          <select id="set-parser">
+            <option value="pymupdf">pymupdf</option>
+            <option value="docling">docling</option>
+            <option value="auto">auto</option>
+          </select>
+        </label>
+        <label>Default resolution
+          <select id="set-dpi">
+            <option value="150">150 dpi</option>
+            <option value="250">250 dpi</option>
+            <option value="300">300 dpi</option>
+            <option value="400">400 dpi</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="set-validate" /> run EPUBCheck</label>
+      </div>
+      <div class="job-actions">
+        <button type="submit">Save</button>
+        <span id="set-status" class="muted"></span>
+      </div>
+      <p class="muted small" id="set-path"></p>
+    </form>
+
+    <div class="filters">
+      <input type="search" id="f-search" placeholder="Search title, author, DOI..." />
+      <select id="f-sent">
+        <option value="">sent or not</option>
+        <option value="no">not sent yet</option>
+        <option value="yes">already sent</option>
+      </select>
+      <select id="f-parser"><option value="">any parser</option></select>
+      <select id="f-year"><option value="">any year</option></select>
+      <select id="f-sort">
+        <option value="created">newest first</option>
+        <option value="title">title</option>
+        <option value="author">author</option>
+        <option value="year">year</option>
+        <option value="journal">journal</option>
+        <option value="pages">pages</option>
+        <option value="figures">figures</option>
+        <option value="references">references</option>
+      </select>
+      <button type="button" id="f-order" title="Reverse the order">&darr;</button>
+    </div>
+
+    <div id="shelf"></div>
+  </section>
 </main>
 
 <!-- ------------------------------------------------- detail overlay -->

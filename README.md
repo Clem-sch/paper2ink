@@ -69,6 +69,24 @@ so checking a paper takes a glance instead of a full read. Unresolved
 references are listed there too — usually supplementary figures that live in
 a separate file.
 
+**Library** is the shelf of everything converted so far, kept in a small
+SQLite file. Each row carries the metadata paper2ink pulled out — author,
+year, journal, pages, figures, references — so the shelf can be searched and
+sorted by any of them, and filtered down to what has not been sent to the
+reader yet. Starring keeps the ones you want to come back to at hand.
+
+**Send to Kindle** opens a mail draft already addressed to your
+Send-to-Kindle address and reveals the EPUB in the file manager. It cannot
+attach the file for you: `mailto:` links carry no attachments, and no mail
+client allows a web page to add one. So the one manual step is dragging the
+file into the draft. Afterwards paper2ink asks whether to mark it as sent,
+because it has no way of knowing whether the mail actually went out — and
+the sent flag is only useful if it is true. You can set or clear it by hand
+at any time.
+
+Remember that Amazon only accepts documents from addresses on your approved
+sender list, under *Preferences → Personal Document Settings*.
+
 **Read** renders the finished EPUB in the browser. An EPUB is XHTML plus CSS,
 so what you see is what the builder wrote, including the cross-reference
 links and the backlinks under each figure. It is not a Kindle simulator; it
@@ -76,6 +94,18 @@ is there to check the book end to end before sending it.
 
 The server binds to localhost and has no authentication, so keep it there.
 `--port` moves it, `--no-browser` suppresses the browser window.
+
+### Where things are kept
+
+| What | Where |
+| --- | --- |
+| Settings (Kindle address, output folder, defaults) | `%APPDATA%\paper2ink\settings.json` |
+| The shelf | `%APPDATA%\paper2ink\library.sqlite3` |
+| Finished EPUBs | the output folder — a `papers` folder beside the working directory by default |
+
+`PAPER2INK_HOME` moves the first two somewhere else, which is also how the
+tests keep out of your real library. Nothing here holds a password: the mail
+is drafted in your own client, so paper2ink never needs your credentials.
 
 ## Use from the command line
 
@@ -276,6 +306,8 @@ src/paper2ink/
   parsers/          # BaseParser, DoclingParser, PyMuPDFParser
   cleanup.py        # hyphenation, running heads, boilerplate, paragraphs
   bibliography.py   # reference-list extraction shared by the backends
+  settings.py       # user settings the GUI writes back
+  library.py        # the shelf: one SQLite row per conversion
   assets.py         # crops, grayscale, cover, debug overlay
   refs.py           # reference detection and linking
   formulas.py       # BaseFormulaRecognizer and backends
@@ -312,7 +344,10 @@ The library knows nothing about the CLI, so a GUI can call
 - Table footnotes printed underneath a table stay in the body text instead of
   travelling with the table into the appendix.
 - Author and journal detection is best effort and falls back to the PDF
-  metadata and then the file name.
+  metadata and then the file name. Publishers that split the author line
+  across several layout blocks (RSC) yield only the first author.
+- The sent flag records that you asked for a draft, not that the mail left
+  your outbox; paper2ink asks you to confirm and you can correct it.
 
 ## Later
 

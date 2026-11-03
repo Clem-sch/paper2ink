@@ -27,6 +27,7 @@ __all__ = [
     "detect_running_heads",
     "head_signature",
     "heading_key",
+    "guess_year",
     "FRONT_MATTER_RE",
     "FRONT_MATTER_LABEL_RE",
     "merge_paragraphs",
@@ -97,6 +98,7 @@ FRONT_MATTER_RE = re.compile(
     r"citation\s|copyright\s*©|type\s+\w+|keywords?\b|"
     r"the\s+orcid\s+identification\s+number|"
     r"article\s+history|supporting\s+information\s+is\s+available|"
+    r"cite\s+this[:\s]|"
     r"doi[:\s]\s*10\.|https?://|www\.\S+\s*$|"
     r"[\w.+-]+@[\w.-]+\.\w+\s*$|"                      # bare e-mail line
     r"\d[A-Z][a-z]+\s|"                                # "1Molecular Dynamics"
@@ -199,6 +201,33 @@ def strip_boilerplate(text: str, patterns: list[re.Pattern[str]]) -> str:
         if not any(p.match(line) for p in patterns)
     ]
     return "\n".join(kept)
+
+
+_YEAR_RE = re.compile(r"\b(19[89]\d|20[0-4]\d)\b")
+_COPYRIGHT_YEAR_RE = re.compile(r"©\s*(\d{4})")
+
+
+def guess_year(text: str) -> str | None:
+    """The publication year of a paper, from its first page.
+
+    Taking the largest year on the page is wrong: publishers stamp the
+    download date onto the PDF, so a 2019 paper fetched today reads as
+    2025.  The copyright line is the reliable signal, and where there is
+    none, the year the page repeats most often - a download date appears
+    once, the publication year appears in the citation, the footer and the
+    copyright notice.
+    """
+    copyright_year = _COPYRIGHT_YEAR_RE.search(text)
+    if copyright_year and _YEAR_RE.fullmatch(copyright_year.group(1)):
+        return copyright_year.group(1)
+    years = _YEAR_RE.findall(text)
+    if not years:
+        return None
+    counts = Counter(years)
+    best = max(counts.values())
+    # Among equally common years prefer the most recent, which is the
+    # publication rather than a work it cites.
+    return max(year for year, count in counts.items() if count == best)
 
 
 def _removed_lines(original: str, kept: str) -> str:

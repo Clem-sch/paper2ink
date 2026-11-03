@@ -8,6 +8,7 @@ from paper2ink.cleanup import (
     CleanupConfig,
     clean_document,
     detect_running_heads,
+    guess_year,
     is_line_number,
     join_lines,
     merge_paragraphs,
@@ -180,3 +181,40 @@ def test_clean_document_drops_empty_and_boilerplate_blocks():
     cleaned = clean_document(doc)
     texts = [b.text for b in cleaned.blocks]
     assert texts == ["Introduction", "Real content here."]
+
+
+# --------------------------------------------------------------------------
+# publication year
+# --------------------------------------------------------------------------
+
+
+def test_the_copyright_year_wins_over_a_download_stamp():
+    """Publishers stamp the download date on the PDF: a 2019 paper fetched
+    today must not come out as 2025."""
+    page = (
+        "Downloaded via UNIV HEIDELBERG on May 6, 2025 at 16:37:15 (UTC).\n"
+        "J. Phys. Chem. A 2019, 123, 5579-5589\n"
+        "\u00a9 2019 American Chemical Society\n"
+    )
+    assert guess_year(page) == "2019"
+
+
+def test_without_a_copyright_line_the_most_common_year_wins():
+    page = (
+        "Downloaded on November 3, 2025.\n"
+        "Received 12 March 2015. Accepted 4 May 2015.\n"
+        "J. Chem. Theory Comput. 2015, 11, 1525\n"
+    )
+    assert guess_year(page) == "2015"
+
+
+def test_equally_common_years_pick_the_most_recent():
+    assert guess_year("cites 2001 and was published 2019") == "2019"
+
+
+def test_no_year_at_all():
+    assert guess_year("a page with no dates on it") is None
+
+
+def test_implausible_years_are_ignored():
+    assert guess_year("figure 1850 and 2099 and 2019") == "2019"

@@ -13,11 +13,28 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from paper2ink.gui.jobs import JobStore  # noqa: E402
 from paper2ink.gui.server import create_app  # noqa: E402
+from paper2ink.library import Library  # noqa: E402
+from paper2ink.settings import Settings  # noqa: E402
 
 
 @pytest.fixture(scope="module")
-def client(tmp_path_factory: pytest.TempPathFactory):
-    store = JobStore(tmp_path_factory.mktemp("gui"))
+def store(tmp_path_factory: pytest.TempPathFactory) -> JobStore:
+    """A store that writes everything under the test's own directory.
+
+    The output folder has to be set explicitly: the default is a "papers"
+    folder beside the working directory, which during a test run is the
+    real one.
+    """
+    root = tmp_path_factory.mktemp("gui")
+    return JobStore(
+        root,
+        library=Library(root / "library.sqlite3"),
+        settings=Settings(output_dir=str(root / "out")),
+    )
+
+
+@pytest.fixture(scope="module")
+def client(store: JobStore):
     with TestClient(create_app(store)) as test_client:
         yield test_client
     store.shutdown()
@@ -224,3 +241,158 @@ def test_static_files_are_not_cached(client):
 def test_review_reports_unresolved_targets(client, job):
     data = client.get(f"/api/jobs/{job['id']}/review").json()
     assert isinstance(data["unresolved"], dict)
+
+
+# --------------------------------------------------------------------------
+# settings
+# --------------------------------------------------------------------------
+
+
+def test_settings_start_from_the_defaults(client):
+    data = client.get("/api/settings").json()
+    assert data["parser"] in ("pymupdf", "docling", "auto")
+    assert data["output_dir"]
+    assert "path" in data
+
+
+def test_settings_round_trip(client, tmp_path):
+    before = client.get("/api/settings").json()
+    target = tmp_path / "shelf"
+    response = client.put(
+        "/api/settings",
+        json={"kindle_email": "me_abc@kindle.com", "output_dir": str(target),
+              "dpi": 300, "tables": "html"},
+    )
+    assert response.status_code == 200
+    assert client.get("/api/settings").json()["kindle_email"] == "me_abc@kindle.com"
+    assert target.is_dir(), "the output folder should be created"
+    # Put everything back: this module shares one store, and the shelf
+    # tests check where the already converted book was written.
+    client.put(
+        "/api/settings",
+        json={"dpi": 250, "tables": "image", "output_dir": before["output_dir"]},
+    )
+
+
+@pytest.mark.parametrize("bad", ["not-an-address", "@nowhere", "a b@c.de"])
+def test_a_bad_kindle_address_is_rejected(client, bad):
+    assert client.put("/api/settings", json={"kindle_email": bad}).status_code == 400
+
+
+def test_the_address_can_be_cleared(client):
+    client.put("/api/settings", json={"kindle_email": "me@kindle.com"})
+    assert client.put("/api/settings", json={"kindle_email": ""}).status_code == 200
+    assert client.get("/api/settings").json()["kindle_email"] == ""
+
+
+def test_unknown_parser_in_settings_is_rejected(client):
+    assert client.put("/api/settings", json={"parser": "magic"}).status_code == 400
+
+
+def test_dpi_is_clamped(client):
+    assert client.put("/api/settings", json={"dpi": 9999}).json()["dpi"] == 600
+    client.put("/api/settings", json={"dpi": 250})
+
+
+# --------------------------------------------------------------------------
+# the shelf
+# --------------------------------------------------------------------------
+
+
+def test_a_finished_conversion_lands_in_the_library(client, job):
+    data = client.get("/api/library").json()
+    assert data["stats"]["total"] >= 1
+    entry = next(e for e in data["entries"] if e["id"] == job["entry_id"])
+    assert entry["title"].startswith("A Minimal Paper")
+    assert entry["references_count"] == 3
+    assert entry["is_sent"] is False
+    assert entry["epub_exists"] is True
+
+
+def test_the_epub_is_written_to_the_configured_folder(client, job, store):
+    entry = client.get("/api/library").json()["entries"][0]
+    assert Path(entry["epub_path"]).parent == store.settings.output_path
+
+
+def test_library_filters_and_sorting_are_offered(client, job):
+    data = client.get("/api/library").json()
+    assert "created" in data["sort_fields"] and "year" in data["sort_fields"]
+    assert "pymupdf" in data["parsers"]
+
+
+def test_searching_the_shelf(client, job):
+    found = client.get("/api/library", params={"search": "Minimal"}).json()
+    assert found["entries"]
+    missing = client.get("/api/library", params={"search": "zzzznothing"}).json()
+    assert missing["entries"] == []
+
+
+def test_marking_an_entry_as_sent_and_back(client, job):
+    entry_id = job["entry_id"]
+    assert client.post(f"/api/library/{entry_id}/sent").json()["is_sent"] is True
+    unsent = client.get("/api/library", params={"sent": "no"}).json()["entries"]
+    assert all(e["id"] != entry_id for e in unsent)
+
+    client.post(f"/api/library/{entry_id}/sent", json={"sent": False})
+    assert client.get("/api/library", params={"sent": "no"}).json()["entries"]
+
+
+def test_starring_an_entry(client, job):
+    entry_id = job["entry_id"]
+    client.post(f"/api/library/{entry_id}/starred", json={"starred": True})
+    starred = client.get("/api/library", params={"starred": "yes"}).json()
+    assert any(e["id"] == entry_id for e in starred["entries"])
+    client.post(f"/api/library/{entry_id}/starred", json={"starred": False})
+
+
+def test_downloading_from_the_shelf(client, job):
+    response = client.get(f"/api/library/{job['entry_id']}/epub")
+    assert response.status_code == 200
+    assert response.content[:2] == b"PK"
+
+
+def test_unknown_entry_is_a_404(client):
+    assert client.post("/api/library/999999/sent").status_code == 404
+    assert client.get("/api/library/999999/epub").status_code == 404
+
+
+# --------------------------------------------------------------------------
+# sending
+# --------------------------------------------------------------------------
+
+
+def test_sending_without_an_address_explains_itself(client, job):
+    client.put("/api/settings", json={"kindle_email": ""})
+    response = client.post(f"/api/library/{job['entry_id']}/send")
+    assert response.status_code == 400
+    assert "Settings" in response.json()["detail"]
+
+
+def test_sending_returns_a_prepared_draft(client, job, monkeypatch):
+    import paper2ink.gui.server as server
+
+    revealed: list[Path] = []
+    monkeypatch.setattr(server, "_reveal", lambda path: revealed.append(path) or True)
+
+    client.put("/api/settings", json={"kindle_email": "me_abc@kindle.com"})
+    data = client.post(f"/api/library/{job['entry_id']}/send").json()
+
+    assert data["mailto"].startswith("mailto:me_abc%40kindle.com")
+    assert data["file"].endswith(".epub")
+    assert revealed, "the folder holding the book should be revealed"
+
+
+def test_sending_does_not_mark_as_sent_by_itself(client, job, monkeypatch):
+    """The mail is only drafted, so the user confirms that it went out."""
+    import paper2ink.gui.server as server
+
+    monkeypatch.setattr(server, "_reveal", lambda path: True)
+    client.put("/api/settings", json={"kindle_email": "me_abc@kindle.com"})
+    client.post(f"/api/library/{job['entry_id']}/sent", json={"sent": False})
+    client.post(f"/api/library/{job['entry_id']}/send")
+
+    entry = next(
+        e for e in client.get("/api/library").json()["entries"]
+        if e["id"] == job["entry_id"]
+    )
+    assert entry["is_sent"] is False

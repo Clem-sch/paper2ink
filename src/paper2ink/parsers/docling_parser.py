@@ -39,6 +39,7 @@ from ..bibliography import (
 from ..cleanup import (
     FRONT_MATTER_LABEL_RE,
     FRONT_MATTER_RE,
+    guess_year,
     heading_key,
     normalize_text,
 )
@@ -394,7 +395,7 @@ class DoclingParser(BaseParser):
                 if a.strip()
             ]
         meta.doi = meta.doi or extract_doi(first_page_text)
-        meta.year = meta.year or _guess_year(first_page_text)
+        meta.year = meta.year or guess_year(first_page_text)
         if not meta.abstract:
             meta.abstract = _extract_abstract(doc)
         _extract_references(doc)
@@ -518,9 +519,6 @@ def _authors_from_blocks(doc: Document) -> list[str]:
     return []
 
 
-def _guess_year(text: str) -> str | None:
-    years = re.findall(r"\b(19[89]\d|20[0-4]\d)\b", text)
-    return max(years) if years else None
 
 
 def _extract_abstract(doc: Document) -> str:

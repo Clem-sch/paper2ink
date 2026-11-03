@@ -464,3 +464,251 @@ function renderExtracted(page) {
         host.appendChild(div);
     });
 }
+
+/* ------------------------------------------------------------ settings */
+
+const settingsForm = $("settings");
+
+$("settings-toggle").addEventListener("click", () => {
+    settingsForm.hidden = !settingsForm.hidden;
+    if (!settingsForm.hidden) loadSettings();
+});
+
+async function loadSettings() {
+    try {
+        const data = await (await fetch("/api/settings")).json();
+        $("set-email").value = data.kindle_email || "";
+        $("set-output").value = data.output_dir || "";
+        $("set-parser").value = data.parser;
+        $("set-dpi").value = String(data.dpi);
+        $("set-validate").checked = !!data.validate;
+        $("set-path").textContent = `Stored in ${data.path}`;
+        $("set-output-note").textContent = data.output_exists
+            ? "The finished EPUBs are written here."
+            : "This folder will be created when you save.";
+        state.settings = data;
+    } catch (_) { /* leave the form as it is */ }
+}
+
+settingsForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const status = $("set-status");
+    status.textContent = "saving…";
+    try {
+        const response = await fetch("/api/settings", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                kindle_email: $("set-email").value.trim(),
+                output_dir: $("set-output").value.trim(),
+                parser: $("set-parser").value,
+                dpi: Number($("set-dpi").value),
+                validate: $("set-validate").checked,
+            }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || "could not save");
+        status.textContent = "saved";
+        state.settings = data;
+        $("opt-parser").value = data.parser;
+        $("opt-dpi").value = String(data.dpi);
+        setTimeout(() => (status.textContent = ""), 2500);
+    } catch (error) {
+        status.textContent = String(error.message || error);
+    }
+});
+
+/* ------------------------------------------------------------ the shelf */
+
+const filters = {
+    search: $("f-search"),
+    sent: $("f-sent"),
+    parser: $("f-parser"),
+    year: $("f-year"),
+    sort: $("f-sort"),
+};
+let descending = true;
+
+Object.values(filters).forEach((element) =>
+    element.addEventListener("input", () => loadShelf())
+);
+$("f-order").addEventListener("click", () => {
+    descending = !descending;
+    $("f-order").textContent = descending ? "↓" : "↑";
+    loadShelf();
+});
+
+async function loadShelf() {
+    const params = new URLSearchParams({
+        search: filters.search.value.trim(),
+        sent: filters.sent.value,
+        parser: filters.parser.value,
+        year: filters.year.value,
+        sort: filters.sort.value,
+        order: descending ? "desc" : "asc",
+    });
+    let data;
+    try {
+        data = await (await fetch("/api/library?" + params)).json();
+    } catch (_) {
+        return;
+    }
+
+    const stats = data.stats;
+    $("shelf-stats").textContent = stats.total
+        ? `${stats.total} converted, ${stats.unsent} not sent yet`
+        : "nothing converted yet";
+
+    fillOptions(filters.parser, data.parsers, "any parser");
+    fillOptions(filters.year, data.years, "any year");
+
+    const host = $("shelf");
+    host.innerHTML = "";
+    if (!data.entries.length) {
+        host.innerHTML = '<p class="empty">Nothing matches these filters.</p>';
+        return;
+    }
+    data.entries.forEach((entry) => host.appendChild(shelfRow(entry)));
+}
+
+function fillOptions(select, values, placeholder) {
+    const current = select.value;
+    select.innerHTML = "";
+    const first = document.createElement("option");
+    first.value = "";
+    first.textContent = placeholder;
+    select.appendChild(first);
+    values.forEach((value) => {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value;
+        select.appendChild(option);
+    });
+    select.value = current;
+}
+
+function shelfRow(entry) {
+    const row = document.createElement("div");
+    row.className = "row " + (entry.is_sent ? "sent" : "unsent");
+
+    const star = document.createElement("button");
+    star.className = "star" + (entry.starred ? " on" : "");
+    star.textContent = entry.starred ? "★" : "☆";
+    star.title = entry.starred ? "Remove the star" : "Star this paper";
+    star.addEventListener("click", async () => {
+        await postJSON(`/api/library/${entry.id}/starred`, {
+            starred: !entry.starred,
+        });
+        loadShelf();
+    });
+    row.appendChild(star);
+
+    const main = document.createElement("div");
+    main.className = "row-main";
+    const title = document.createElement("div");
+    title.className = "row-title";
+    title.textContent = entry.title || entry.source_name;
+    const meta = document.createElement("div");
+    meta.className = "row-meta";
+    const bits = [
+        entry.first_author && entry.year
+            ? `${entry.first_author} ${entry.year}`
+            : entry.first_author || entry.year,
+        entry.journal,
+        entry.pages ? `${entry.pages} pages` : "",
+        entry.figures ? `${entry.figures} figures` : "",
+        entry.references_count ? `${entry.references_count} refs` : "",
+        entry.parser,
+    ].filter(Boolean);
+    meta.textContent = bits.join(" · ");
+    main.append(title, meta);
+    row.appendChild(main);
+
+    const pill = document.createElement("span");
+    if (!entry.epub_exists) {
+        pill.className = "pill gone";
+        pill.textContent = "file missing";
+    } else {
+        pill.className = "pill " + (entry.is_sent ? "sent" : "unsent");
+        pill.textContent = entry.is_sent
+            ? "sent " + entry.sent_at.slice(0, 10)
+            : "not sent";
+    }
+    row.appendChild(pill);
+
+    const actions = document.createElement("div");
+    actions.className = "row-actions";
+
+    if (entry.epub_exists) {
+        actions.appendChild(makeButton("Send to Kindle", () => sendToKindle(entry)));
+        actions.appendChild(
+            makeButton("Show file", () => postJSON(`/api/library/${entry.id}/reveal`, {}))
+        );
+        actions.appendChild(
+            makeButton("Download", () => {
+                window.location.href = `/api/library/${entry.id}/epub`;
+            })
+        );
+    }
+    actions.appendChild(
+        makeButton(entry.is_sent ? "Mark unsent" : "Mark sent", async () => {
+            await postJSON(`/api/library/${entry.id}/sent`, { sent: !entry.is_sent });
+            loadShelf();
+        })
+    );
+    actions.appendChild(
+        makeButton("Remove", async () => {
+            await fetch(`/api/library/${entry.id}`, { method: "DELETE" });
+            loadShelf();
+        })
+    );
+    row.appendChild(actions);
+    return row;
+}
+
+function makeButton(label, handler) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", handler);
+    return button;
+}
+
+async function postJSON(url, payload) {
+    const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.detail || "request failed");
+    return data;
+}
+
+/* A mailto: link cannot carry an attachment - every mail client refuses
+ * that - so the draft opens pre-addressed and the folder holding the book
+ * is revealed, leaving one drag to the user. */
+async function sendToKindle(entry) {
+    let data;
+    try {
+        data = await postJSON(`/api/library/${entry.id}/send`, {});
+    } catch (error) {
+        alert(String(error.message || error));
+        if (settingsForm.hidden) $("settings-toggle").click();
+        return;
+    }
+    window.location.href = data.mailto;
+    const name = data.file.split(/[\\/]/).pop();
+    setTimeout(async () => {
+        const question =
+            `Attach "${name}" from the folder that just opened, then send.` +
+            `\n\nMark it as sent now?`;
+        if (confirm(question)) {
+            await postJSON(`/api/library/${entry.id}/sent`, { sent: true });
+            loadShelf();
+        }
+    }, 800);
+}
+
+loadShelf();
+loadSettings();
