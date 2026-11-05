@@ -358,4 +358,4 @@ repeating each figure after the paragraph that first mentions it.
 
 ## Licence
 
-MIT.
+MIT, see [LICENSE](LICENSE).
