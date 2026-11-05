@@ -8,6 +8,9 @@ papers are fetched on demand by ``scripts/fetch_test_papers.py``.
 
 from __future__ import annotations
 
+import os
+import shutil
+import tempfile
 from pathlib import Path
 
 import pymupdf
@@ -16,6 +19,23 @@ import pytest
 BODY = 10
 HEADING = 13
 TITLE = 20
+
+# Point paper2ink's own config directory at a throwaway folder before any
+# test imports the package.  Without this the GUI tests write the user's
+# real settings.json, which once left a pytest temp path as the output
+# folder and a fixture address as the Send-to-Kindle address.
+_TEST_HOME = tempfile.mkdtemp(prefix="paper2ink-test-home-")
+os.environ["PAPER2INK_HOME"] = _TEST_HOME
+
+
+@pytest.fixture(autouse=True, scope="session")
+def isolated_config_dir():
+    """Guard the real settings and library for the whole session."""
+    from paper2ink.settings import config_dir
+
+    assert str(config_dir()) == _TEST_HOME, "tests must not use the real config"
+    yield
+    shutil.rmtree(_TEST_HOME, ignore_errors=True)
 
 
 def _write(page: pymupdf.Page, x: float, y: float, text: str, size: float = BODY,
