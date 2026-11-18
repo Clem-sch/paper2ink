@@ -735,12 +735,17 @@ async function pickUpText(bbox) {
         };
     };
 
+    // Cancelling mousedown is not enough on its own: the browser still
+    // takes the page image with the pointer as a native drag, so dragstart
+    // has to be refused outright.
+    box.addEventListener("dragstart", (event) => event.preventDefault());
+
     box.addEventListener("mousedown", (event) => {
-        if (!drawing || event.button !== 0) return;
+        if (!drawMode || event.button !== 0) return;
         event.preventDefault();
         start = pointIn(event);
         rubber = document.createElement("div");
-        rubber.className = "rubber";
+        rubber.className = drawMode === "text" ? "rubber text" : "rubber";
         $("boxes").appendChild(rubber);
     });
 

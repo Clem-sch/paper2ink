@@ -316,7 +316,12 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 
 /* while drawing, the page is a canvas */
 .pagebox.drawing { cursor: crosshair; }
-.pagebox.drawing img { user-select: none; }
+/* Without this the browser picks the page image up as a native drag the
+   moment you press on it, and the rubber band never forms. */
+.pagebox img {
+    -webkit-user-drag: none;
+    user-select: none;
+}
 .rubber {
     position: absolute;
     border: 2px dashed var(--asset);
