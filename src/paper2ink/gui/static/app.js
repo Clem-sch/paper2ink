@@ -294,7 +294,7 @@ async function loadReview(jobId) {
     }
     state.review = data;
     state.corrections = {
-        removed: [], restored: [], regions: [], order: {},
+        removed: [], restored: [], regions: [], text_blocks: [], order: {},
         ...(data.corrections || {}),
     };
     // The server keys reordering by page number; JSON turned those into
@@ -431,6 +431,12 @@ function drawBoxes(number) {
             place(region.bbox, "drawn", `drawn: ${region.caption || "figure"}`,
                   "r" + index)
         );
+    corrections().text_blocks
+        .filter((picked) => picked.page === number)
+        .forEach((picked, index) =>
+            place(picked.bbox, "added", `picked up: ${picked.text.slice(0, 60)}`,
+                  "t" + index)
+        );
     page.kept.forEach((block, index) =>
         place(block.bbox, "kept", `${block.type}: ${block.text.slice(0, 80)}`, "k" + index)
     );
@@ -554,7 +560,9 @@ function renderExtracted(page) {
  * compounds and "discard" really goes back to what the parser said. */
 function corrections() {
     if (!state.corrections) {
-        state.corrections = { removed: [], restored: [], regions: [], order: {} };
+        state.corrections = {
+            removed: [], restored: [], regions: [], text_blocks: [], order: {},
+        };
     }
     return state.corrections;
 }
@@ -571,6 +579,7 @@ function countEdits() {
         edits.removed.length +
         edits.restored.length +
         edits.regions.length +
+        edits.text_blocks.length +
         Object.keys(edits.order).length
     );
 }
@@ -582,6 +591,8 @@ function refreshEdits() {
     if (edits.removed.length) parts.push(`${edits.removed.length} left out`);
     if (edits.restored.length) parts.push(`${edits.restored.length} brought back`);
     if (edits.regions.length) parts.push(`${edits.regions.length} drawn`);
+    if (edits.text_blocks.length)
+        parts.push(`${edits.text_blocks.length} text picked up`);
     if (Object.keys(edits.order).length)
         parts.push(`${Object.keys(edits.order).length} page(s) reordered`);
     $("edit-summary").textContent = total ? parts.join(", ") : "no changes";
@@ -612,7 +623,9 @@ function movePageBlock(page, index, direction) {
 }
 
 $("reset-corrections").addEventListener("click", () => {
-    state.corrections = { removed: [], restored: [], regions: [], order: {} };
+    state.corrections = {
+        removed: [], restored: [], regions: [], text_blocks: [], order: {},
+    };
     loadReview(state.jobId);
 });
 
@@ -659,14 +672,54 @@ async function waitForJob(jobId) {
 /* ------------------------------------------------- drawing a region */
 
 const drawToggle = $("draw-toggle");
-let drawing = false;
+const textToggle = $("text-toggle");
+/* "" | "figure" | "text" - only one mode can be armed at a time. */
+let drawMode = "";
 
-drawToggle.addEventListener("click", () => {
-    drawing = !drawing;
-    drawToggle.classList.toggle("on", drawing);
-    $("pagebox").classList.toggle("drawing", drawing);
-    drawToggle.textContent = drawing ? "Stop drawing" : "Draw a figure region";
-});
+function setDrawMode(mode) {
+    drawMode = drawMode === mode ? "" : mode;
+    drawToggle.classList.toggle("on", drawMode === "figure");
+    textToggle.classList.toggle("on", drawMode === "text");
+    $("pagebox").classList.toggle("drawing", drawMode !== "");
+    drawToggle.textContent =
+        drawMode === "figure" ? "Stop drawing" : "Draw a figure region";
+    textToggle.textContent = drawMode === "text" ? "Stop picking" : "Pick up text";
+}
+
+drawToggle.addEventListener("click", () => setDrawMode("figure"));
+textToggle.addEventListener("click", () => setDrawMode("text"));
+
+/* Reading the text out of the rectangle happens on the server, which has
+ * the PDF.  The reader gets it back to check and correct first: a clip can
+ * catch a stray column, and silently inserting whatever came out would be
+ * worse than not offering this at all. */
+async function pickUpText(bbox) {
+    let found;
+    try {
+        found = await postJSON(`/api/jobs/${state.jobId}/text-in-region`, {
+            page: state.page,
+            bbox,
+        });
+    } catch (error) {
+        alert(String(error.message || error));
+        return;
+    }
+    if (found.empty) {
+        alert("There is no text in that rectangle.");
+        return;
+    }
+    const text = prompt(
+        "Insert this text as a block? You can correct it here.",
+        found.text
+    );
+    if (text === null || !text.trim()) return;
+
+    const type = /^\s*\d+(\.\d+)*\.?\s+\S/.test(text) && text.length < 90
+        ? "heading"
+        : "paragraph";
+    corrections().text_blocks.push({ page: state.page, bbox, text, type });
+    refreshEdits();
+}
 
 (function enableDrawing() {
     const box = $("pagebox");
@@ -714,6 +767,18 @@ drawToggle.addEventListener("click", () => {
         const height = Math.abs(end.y - from.y);
         if (width < 12 || height < 12) return;   // a stray click, not a drag
 
+        const bbox = [
+            Math.min(from.x, end.x) / scale.x,
+            Math.min(from.y, end.y) / scale.y,
+            Math.max(from.x, end.x) / scale.x,
+            Math.max(from.y, end.y) / scale.y,
+        ];
+
+        if (drawMode === "text") {
+            pickUpText(bbox);
+            return;
+        }
+
         const caption = prompt(
             "Caption for this figure (leave empty for none).\n" +
             "Start with “Figure 7” or “Table 2” to give it that number."
@@ -725,12 +790,7 @@ drawToggle.addEventListener("click", () => {
             : "";
         corrections().regions.push({
             page: state.page,
-            bbox: [
-                Math.min(from.x, end.x) / scale.x,
-                Math.min(from.y, end.y) / scale.y,
-                Math.max(from.x, end.x) / scale.x,
-                Math.max(from.y, end.y) / scale.y,
-            ],
+            bbox,
             label,
             caption: label ? caption.replace(/^[^.:|]*[.:|]\s*/, "") : caption,
             kind: /^\s*table/i.test(caption) ? "table" : "figure",

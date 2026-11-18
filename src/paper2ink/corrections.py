@@ -26,7 +26,13 @@ from .refs import normalize_key, parse_caption_label
 
 log = logging.getLogger("paper2ink.corrections")
 
-__all__ = ["Region", "Corrections", "apply_corrections", "drop_id"]
+__all__ = [
+    "Region",
+    "TextBlock",
+    "Corrections",
+    "apply_corrections",
+    "drop_id",
+]
 
 #: Reason recorded for a block the reader took out of the flow.
 MANUAL_REASON = "removed by hand"
@@ -53,6 +59,25 @@ class Region:
 
 
 @dataclass
+class TextBlock:
+    """Text the reader picked up from a rectangle on the page.
+
+    The text itself is carried here rather than re-read from the PDF when
+    the correction is applied: the reader sees and can fix what was
+    captured before it goes in, and a rebuild then stays deterministic.
+    """
+
+    page: int
+    bbox: list[float]
+    text: str
+    type: str = "paragraph"
+
+    def as_bbox(self) -> BBox:
+        x0, y0, x1, y1 = self.bbox
+        return BBox(self.page, min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+
+
+@dataclass
 class Corrections:
     """What the reader changed about one parse."""
 
@@ -62,12 +87,20 @@ class Corrections:
     restored: list[str] = field(default_factory=list)
     #: Regions the reader drew on a page.
     regions: list[Region] = field(default_factory=list)
+    #: Text the reader picked up from a rectangle the parser skipped.
+    text_blocks: list[TextBlock] = field(default_factory=list)
     #: Page number -> block ids in the order the reader wants them read.
     order: dict[int, list[str]] = field(default_factory=dict)
 
     @property
     def is_empty(self) -> bool:
-        return not (self.removed or self.restored or self.regions or self.order)
+        return not (
+            self.removed
+            or self.restored
+            or self.regions
+            or self.text_blocks
+            or self.order
+        )
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -88,6 +121,16 @@ class Corrections:
             for item in raw.get("regions", [])
             if item.get("bbox") and len(item["bbox"]) == 4
         ]
+        text_blocks = [
+            TextBlock(
+                page=int(item["page"]),
+                bbox=[float(value) for value in item["bbox"]],
+                text=str(item.get("text", "")),
+                type=str(item.get("type", "paragraph")),
+            )
+            for item in raw.get("text_blocks", [])
+            if item.get("bbox") and len(item["bbox"]) == 4 and item.get("text")
+        ]
         order: dict[int, list[str]] = {}
         for page, ids in (raw.get("order") or {}).items():
             try:
@@ -98,6 +141,7 @@ class Corrections:
             removed=[str(x) for x in raw.get("removed", [])],
             restored=[str(x) for x in raw.get("restored", [])],
             regions=regions,
+            text_blocks=text_blocks,
             order=order,
         )
 
@@ -116,6 +160,7 @@ def apply_corrections(document: Document, corrections: Corrections) -> Document:
     _restore(doc, corrections.restored)
     _remove(doc, corrections.removed)
     _add_regions(doc, corrections.regions)
+    _add_text_blocks(doc, corrections.text_blocks)
     _reorder(doc, corrections.order)
     return doc
 
@@ -173,6 +218,29 @@ def _insert_in_reading_order(doc: Document, block: Block) -> None:
             doc.blocks.insert(index, block)
             return
     doc.blocks.append(block)
+
+
+#: Block types the reader may choose for a picked-up text region.
+TEXT_BLOCK_TYPES = ("paragraph", "heading", "caption", "footnote", "list_item")
+
+
+def _add_text_blocks(doc: Document, text_blocks: list[TextBlock]) -> None:
+    """Insert text the reader picked up at its place on the page."""
+    for index, picked in enumerate(text_blocks):
+        if not picked.text.strip():
+            continue
+        block_type = (
+            picked.type if picked.type in TEXT_BLOCK_TYPES else "paragraph"
+        )
+        block = Block(
+            id=f"added-{index:04d}",
+            type=block_type,  # type: ignore[arg-type]
+            text=picked.text.strip(),
+            level=1 if block_type == "heading" else 0,
+            page=picked.page,
+            bbox=picked.as_bbox(),
+        )
+        _insert_in_reading_order(doc, block)
 
 
 def _add_regions(doc: Document, regions: list[Region]) -> None:

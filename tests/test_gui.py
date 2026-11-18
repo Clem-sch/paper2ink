@@ -496,3 +496,77 @@ def test_corrections_replace_rather_than_accumulate(client, job):
 
 def test_rebuilding_an_unknown_job_is_a_404(client):
     assert client.post("/api/jobs/nope/rebuild", json={}).status_code == 404
+
+
+# --------------------------------------------------------------------------
+# picking up text the parser skipped
+# --------------------------------------------------------------------------
+
+
+def test_text_in_region_reads_the_rectangle(client, job):
+    """The sample PDF has its title near the top of page one."""
+    response = client.post(
+        f"/api/jobs/{job['id']}/text-in-region",
+        json={"page": 0, "bbox": [40, 50, 560, 100]},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "Minimal Paper" in data["text"]
+    assert data["empty"] is False
+
+
+def test_text_in_an_empty_corner_is_reported_as_empty(client, job):
+    data = client.post(
+        f"/api/jobs/{job['id']}/text-in-region",
+        json={"page": 0, "bbox": [0, 800, 40, 840]},
+    ).json()
+    assert data["empty"] is True
+    assert data["text"] == ""
+
+
+def test_text_in_region_needs_a_page_and_a_box(client, job):
+    assert client.post(
+        f"/api/jobs/{job['id']}/text-in-region", json={"page": 0}
+    ).status_code == 400
+    assert client.post(
+        f"/api/jobs/{job['id']}/text-in-region",
+        json={"page": 0, "bbox": [1, 2]},
+    ).status_code == 400
+
+
+def test_text_outside_the_document_is_empty(client, job):
+    data = client.post(
+        f"/api/jobs/{job['id']}/text-in-region",
+        json={"page": 99, "bbox": [0, 0, 100, 100]},
+    ).json()
+    assert data["empty"] is True
+
+
+def test_picked_up_text_reaches_the_rebuilt_book(client, job):
+    client.post(
+        f"/api/jobs/{job['id']}/rebuild",
+        json={
+            "corrections": {
+                "text_blocks": [
+                    {
+                        "page": 0,
+                        "bbox": [50, 400, 550, 430],
+                        "text": "Picked up by hand in the review view.",
+                        "type": "paragraph",
+                    }
+                ]
+            }
+        },
+    )
+    assert wait_for(client, job["id"])["status"] == "done"
+    review = client.get(f"/api/jobs/{job['id']}/review").json()
+    texts = [k["text"] for p in review["pages"] for k in p["kept"]]
+    assert "Picked up by hand in the review view." in texts
+
+    # and it is really in the book, not just in the model
+    chapters = client.get(f"/api/jobs/{job['id']}/reader").json()["chapters"]
+    body = "".join(
+        client.get(f"/api/jobs/{job['id']}/book/{c['href']}").text
+        for c in chapters
+    )
+    assert "Picked up by hand in the review view." in body

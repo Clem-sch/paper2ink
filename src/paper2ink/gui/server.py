@@ -162,6 +162,25 @@ def create_app(store: JobStore | None = None) -> FastAPI:
             raise HTTPException(404, "this job has no parsed document")
         return _review_payload(job, document)
 
+    @app.post("/api/jobs/{job_id}/text-in-region")
+    def text_in_region(job_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Read the text inside a rectangle the reader drew on a page.
+
+        The reader gets it back to check and correct before it is inserted,
+        which is why the text travels with the correction instead of being
+        re-read from the PDF at rebuild time.
+        """
+        job = _job(app, job_id)
+        try:
+            page = int(payload["page"])
+            bbox = [float(value) for value in payload["bbox"]]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(400, "page and bbox are required") from exc
+        if len(bbox) != 4:
+            raise HTTPException(400, "bbox needs four numbers")
+        text = _text_in(job.pdf_path, page, bbox)
+        return {"text": text, "page": page, "bbox": bbox, "empty": not text}
+
     @app.post("/api/jobs/{job_id}/rebuild")
     def rebuild_job(job_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         """Build the book again with the reader's corrections applied."""
@@ -515,6 +534,27 @@ def _page_sizes(job: Job, count: int) -> list[list[float]]:
     except Exception:  # pragma: no cover - defensive
         log.debug("could not read page sizes for %s", job.id)
     return sizes
+
+
+def _text_in(pdf_path: Path, page: int, bbox: list[float]) -> str:
+    """Extract the text of one rectangle, joined the way the parser joins it."""
+    import pymupdf
+
+    from ..cleanup import join_lines
+
+    x0, y0, x1, y1 = bbox
+    clip = pymupdf.Rect(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+    try:
+        with pymupdf.open(pdf_path) as pdf:
+            if not 0 <= page < pdf.page_count:
+                return ""
+            raw = pdf[page].get_text("text", clip=clip)
+    except Exception:  # pragma: no cover - defensive
+        log.exception("could not read text at %s on page %s", bbox, page)
+        return ""
+    # Same treatment the parser gives a block, so hyphenation at the line
+    # ends is undone rather than carried into the book.
+    return join_lines(raw.splitlines())
 
 
 def _render_page(job: Job, number: int) -> Path | None:

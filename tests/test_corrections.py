@@ -243,3 +243,101 @@ def test_from_dict_tolerates_rubbish():
 
 def test_from_dict_of_nothing():
     assert Corrections.from_dict(None).is_empty
+
+
+# --------------------------------------------------------------------------
+# text picked up from a rectangle
+# --------------------------------------------------------------------------
+
+
+def test_picked_up_text_enters_the_flow(doc):
+    from paper2ink.corrections import TextBlock
+
+    result = apply_corrections(
+        doc,
+        Corrections(
+            text_blocks=[
+                TextBlock(page=0, bbox=[60, 150, 400, 190],
+                          text="A paragraph the parser skipped.")
+            ]
+        ),
+    )
+    texts = [b.text for b in result.blocks]
+    assert "A paragraph the parser skipped." in texts
+
+
+def test_picked_up_text_lands_at_its_place_on_the_page(doc):
+    from paper2ink.corrections import TextBlock
+
+    result = apply_corrections(
+        doc,
+        Corrections(
+            text_blocks=[
+                TextBlock(page=0, bbox=[60, 150, 400, 190], text="In between.")
+            ]
+        ),
+    )
+    on_page = [b.text[:8] for b in result.blocks if b.page == 0]
+    assert on_page == ["First pa", "In betwe", "Second p"]
+
+
+def test_a_picked_up_heading_becomes_one(doc):
+    from paper2ink.corrections import TextBlock
+
+    result = apply_corrections(
+        doc,
+        Corrections(
+            text_blocks=[
+                TextBlock(page=0, bbox=[0, 0, 10, 10], text="3. Results",
+                          type="heading")
+            ]
+        ),
+    )
+    added = next(b for b in result.blocks if b.text == "3. Results")
+    assert added.type == "heading"
+    assert added.level == 1
+
+
+def test_an_unknown_block_type_falls_back_to_paragraph(doc):
+    from paper2ink.corrections import TextBlock
+
+    result = apply_corrections(
+        doc,
+        Corrections(
+            text_blocks=[
+                TextBlock(page=0, bbox=[0, 0, 10, 10], text="x", type="nonsense")
+            ]
+        ),
+    )
+    assert next(b for b in result.blocks if b.text == "x").type == "paragraph"
+
+
+def test_empty_picked_up_text_is_ignored(doc):
+    from paper2ink.corrections import TextBlock
+
+    before = len(doc.blocks)
+    result = apply_corrections(
+        doc, Corrections(text_blocks=[TextBlock(page=0, bbox=[0, 0, 10, 10],
+                                                text="   ")])
+    )
+    assert len(result.blocks) == before
+
+
+def test_text_blocks_survive_the_round_trip():
+    from paper2ink.corrections import TextBlock
+
+    corrections = Corrections(
+        text_blocks=[TextBlock(page=2, bbox=[1, 2, 3, 4], text="hi",
+                               type="caption")]
+    )
+    restored = Corrections.from_dict(corrections.to_dict())
+    assert restored.text_blocks[0].text == "hi"
+    assert restored.text_blocks[0].type == "caption"
+    assert not restored.is_empty
+
+
+def test_text_blocks_without_text_are_dropped_on_the_way_in():
+    corrections = Corrections.from_dict(
+        {"text_blocks": [{"page": 1, "bbox": [1, 2, 3, 4]}]}
+    )
+    assert corrections.text_blocks == []

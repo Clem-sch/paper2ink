@@ -343,3 +343,7 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 .bx.hot { background: rgba(31, 95, 139, 0.3); border-width: 3px; }
 .blk.hot { background: rgba(31, 95, 139, 0.14); outline: 1px solid var(--kept); }
 .blk { cursor: pointer; }
+
+#text-toggle.on { border-color: var(--kept); color: var(--kept); font-weight: 600; }
+.rubber.text { border-color: var(--kept); background: rgba(47, 111, 176, 0.15); }
+.bx.added { border-color: var(--ok); border-style: dashed; background: rgba(46, 125, 79, 0.18); }

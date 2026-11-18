@@ -83,6 +83,13 @@ is wrong:
   cropped figure, for the ones that were never recognised. Start the caption
   with "Figure 7" or "Table 2" to give it that number; otherwise it gets its
   own number space (`fig-m1`) so it cannot collide with a parsed one.
+- **Pick up text** does the same for prose the parser never saw. Drag a
+  rectangle and the text inside it is read out of the PDF and shown to you
+  before it goes in, because a rectangle easily clips a word or catches the
+  neighbouring column — correct it in the box, and it is inserted at that
+  spot on the page. The text travels with the correction rather than being
+  re-read on each rebuild, so what you approved is what you get. Draw
+  generously around the passage; the clip keeps only what falls inside.
 
 **Rebuild the book** then applies them. The corrections are a declarative
 overlay on the parse, not an edit of it: they are replayed against the
