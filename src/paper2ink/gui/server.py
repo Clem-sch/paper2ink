@@ -20,6 +20,7 @@ from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from ..corrections import Corrections, drop_id
 from ..library import SORT_FIELDS, Library
 from ..model import Document
 from ..pipeline import ConversionSettings
@@ -160,6 +161,23 @@ def create_app(store: JobStore | None = None) -> FastAPI:
         if document is None:
             raise HTTPException(404, "this job has no parsed document")
         return _review_payload(job, document)
+
+    @app.post("/api/jobs/{job_id}/rebuild")
+    def rebuild_job(job_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Build the book again with the reader's corrections applied."""
+        job = _job(app, job_id)
+        if job.status == "running":
+            raise HTTPException(409, "this job is already working")
+        if job.result is None or job.result.parsed is None:
+            raise HTTPException(
+                400, "this job has no stored parse, so it cannot be rebuilt"
+            )
+        corrections = Corrections.from_dict((payload or {}).get("corrections"))
+        try:
+            _store(app).rebuild(job, corrections)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        return job.summary()
 
     @app.get("/api/jobs/{job_id}/page/{number}")
     def page_image(job_id: str, number: int) -> FileResponse:
@@ -427,15 +445,17 @@ def _review_payload(job: Job, document: Document) -> dict[str, Any]:
             continue
         page(block.page)["kept"].append(
             {
+                "id": block.id,
                 "type": block.type,
                 "text": block.text,
                 "bbox": _bbox(block.bbox),
                 "level": block.level,
             }
         )
-    for drop in document.dropped:
+    for index, drop in enumerate(document.dropped):
         page(drop.page)["dropped"].append(
             {
+                "id": drop_id(index),
                 "reason": drop.reason,
                 "text": drop.text,
                 "bbox": _bbox(drop.bbox) if drop.bbox else None,
@@ -471,6 +491,8 @@ def _review_payload(job: Job, document: Document) -> dict[str, Any]:
             "doi": document.metadata.doi,
             "abstract": document.metadata.abstract,
         },
+        "corrections": job.corrections.to_dict(),
+        "rebuilds": job.rebuilds,
         "unresolved": dict(
             sorted(document.unresolved.items(), key=lambda item: -item[1])
         ),

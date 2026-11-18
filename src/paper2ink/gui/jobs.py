@@ -23,9 +23,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..corrections import Corrections
 from ..library import Library, entry_from_result
 from ..model import Document
-from ..pipeline import ConversionResult, ConversionSettings, convert
+from ..pipeline import ConversionResult, ConversionSettings, convert, rebuild
 from ..settings import Settings
 from ..validate import validate_epub
 
@@ -57,6 +58,10 @@ class Job:
     entry_id: int | None = None
     #: none | running | done - EPUBCheck runs after the job reports done.
     validation_state: str = "none"
+    #: What the reader corrected in the review view, replayed on rebuild.
+    corrections: Corrections = field(default_factory=Corrections)
+    #: How many times this job has been rebuilt by hand.
+    rebuilds: int = 0
     _future: Future | None = field(default=None, repr=False)
 
     # -- derived paths -----------------------------------------------------
@@ -91,6 +96,9 @@ class Job:
             "parser": self.settings.parser,
             "entry_id": self.entry_id,
             "validation_state": self.validation_state,
+            "corrections": self.corrections.to_dict(),
+            "rebuilds": self.rebuilds,
+            "can_rebuild": self.result is not None and self.result.parsed is not None,
         }
         build = self.result.build if self.result else None
         if build:
@@ -191,8 +199,10 @@ class JobStore:
 
         try:
             # Validation is a separate step below, so the book is ready to
-            # use the moment it is built.
-            settings = replace(job.settings, validate=False)
+            # use the moment it is built.  The parse is kept so the review
+            # view's corrections can be replayed without reading the PDF
+            # again.
+            settings = replace(job.settings, validate=False, keep_parsed=True)
             result = convert(job.pdf_path, None, settings, progress=progress)
             job.result = result
             if not result.ok:
@@ -217,6 +227,83 @@ class JobStore:
 
         if job.settings.validate:
             self._validate(job)
+
+    # -- rebuilding with corrections ---------------------------------------
+    def rebuild(self, job: Job, corrections: Corrections) -> Job:
+        """Queue a rebuild of *job* with the reader's corrections."""
+        if job.result is None or job.result.parsed is None:
+            raise ValueError("this job has no parse to rebuild from")
+        job.corrections = corrections
+        job.status = "running"
+        job.message = "queued for rebuild"
+        job._future = self._pool.submit(self._run_rebuild, job)
+        return job
+
+    def _run_rebuild(self, job: Job) -> None:
+        def progress(message: str) -> None:
+            job.message = message
+
+        previous = job.epub_path
+        try:
+            settings = replace(job.settings, validate=False, keep_parsed=True)
+            result = rebuild(
+                job.result.parsed,          # type: ignore[union-attr]
+                job.pdf_path,
+                None,
+                settings,
+                job.corrections,
+                progress=progress,
+            )
+            if not result.ok:
+                job.status = "failed"
+                job.error = result.error or "rebuild failed"
+                job.message = "failed"
+                return
+
+            # Take the old book out of the way first so the new one keeps
+            # the same name instead of collecting a "-2" suffix.
+            if previous and previous.exists():
+                previous.unlink(missing_ok=True)
+            result.epub_path = self._publish(result.epub_path)
+            shutil.rmtree(job.book_dir, ignore_errors=True)
+            _unpack(result.epub_path, job.book_dir)
+
+            job.result = result
+            job.rebuilds += 1
+            if job.entry_id:
+                self._update_entry(job)
+            job.status = "done"
+            job.message = f"rebuilt ({job.rebuilds})"
+        except Exception as exc:  # pragma: no cover - the worker must not die
+            log.exception("rebuild of job %s crashed", job.id)
+            job.status = "failed"
+            job.error = f"{type(exc).__name__}: {exc}"
+            job.message = "failed"
+            return
+
+        if job.settings.validate:
+            self._validate(job)
+
+    def _update_entry(self, job: Job) -> None:
+        """Refresh the shelf row after a rebuild."""
+        entry = entry_from_result(job.result, job.settings.parser)
+        self.library.update(
+            job.entry_id,                   # type: ignore[arg-type]
+            epub_path=entry.epub_path,
+            title=entry.title,
+            first_author=entry.first_author,
+            authors=entry.authors,
+            journal=entry.journal,
+            year=entry.year,
+            doi=entry.doi,
+            pages=entry.pages,
+            figures=entry.figures,
+            tables=entry.tables,
+            links=entry.links,
+            references_count=entry.references_count,
+            unresolved=entry.unresolved,
+            suspicious=entry.suspicious,
+        )
 
     def _publish(self, epub_path: Path | None) -> Path | None:
         """Move the finished book out of the work directory."""

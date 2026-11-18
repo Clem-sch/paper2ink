@@ -7,6 +7,7 @@ optional callback so the caller decides how to display it.
 
 from __future__ import annotations
 
+import copy
 import logging
 import re
 import shutil
@@ -19,6 +20,7 @@ from typing import Callable
 
 from .assets import AssetRenderer, RenderOptions, render_cover, render_debug_layout
 from .cleanup import CleanupConfig, clean_document
+from .corrections import Corrections, apply_corrections
 from .epub_builder import BuildOptions, BuildResult, EpubBuilder
 from .formulas import get_formula_recognizer
 from .model import Document
@@ -27,7 +29,13 @@ from .validate import ValidationReport, validate_epub
 
 log = logging.getLogger("paper2ink")
 
-__all__ = ["ConversionSettings", "ConversionResult", "convert", "output_name_for"]
+__all__ = [
+    "ConversionSettings",
+    "ConversionResult",
+    "convert",
+    "rebuild",
+    "output_name_for",
+]
 
 ProgressCallback = Callable[[str], None]
 
@@ -54,6 +62,9 @@ class ConversionSettings:
     azw3: bool = False
     dump_json: bool = False
     keep_temp: bool = False
+    #: Keep the untouched parse on the result, so a rebuild with manual
+    #: corrections does not have to read the PDF again.
+    keep_parsed: bool = False
     debug_layout: bool = False
     validate: bool = True
     boilerplate: list[str] | None = None
@@ -82,6 +93,8 @@ class ConversionResult:
     build: BuildResult | None = None
     validation: ValidationReport | None = None
     document: Document | None = None
+    #: The parse before clean-up, as a plain dict; see keep_parsed.
+    parsed: dict | None = None
     error: str | None = None
     warnings: list[str] = field(default_factory=list)
 
@@ -98,8 +111,14 @@ def convert(
     out_path: Path | None = None,
     settings: ConversionSettings | None = None,
     progress: ProgressCallback | None = None,
+    document: Document | None = None,
 ) -> ConversionResult:
-    """Convert one PDF into an EPUB.  Never raises for per-document problems."""
+    """Convert one PDF into an EPUB.  Never raises for per-document problems.
+
+    Pass *document* to skip parsing and build from a document that is already
+    in hand, which is how :func:`rebuild` applies manual corrections without
+    reading the PDF a second time.
+    """
     settings = settings or ConversionSettings()
     pdf_path = Path(pdf_path)
     result = ConversionResult(source=pdf_path)
@@ -116,9 +135,16 @@ def convert(
     work_dir = Path(tempfile.mkdtemp(prefix="paper2ink-"))
     image_dir = work_dir / "images"
     try:
-        step(f"parsing with {settings.parser}")
-        parser = get_parser(settings.parser, settings.parse_options())
-        doc = parser.parse(pdf_path)
+        if document is not None:
+            doc = document
+        else:
+            step(f"parsing with {settings.parser}")
+            parser = get_parser(settings.parser, settings.parse_options())
+            doc = parser.parse(pdf_path)
+        if settings.keep_parsed and document is None:
+            # Keep the untouched parse so the reader's corrections can be
+            # replayed against it without reading the PDF again.
+            result.parsed = doc.to_dict()
         result.document = doc
 
         step("cleaning up text")
@@ -185,6 +211,39 @@ def convert(
 
 
 # --------------------------------------------------------------------------
+
+
+def rebuild(
+    parsed: dict | Document,
+    pdf_path: Path,
+    out_path: Path | None = None,
+    settings: ConversionSettings | None = None,
+    corrections: "Corrections | None" = None,
+    progress: ProgressCallback | None = None,
+) -> ConversionResult:
+    """Build the EPUB again from an existing parse, with corrections applied.
+
+    Parsing is the slow part and the corrections describe what the parser got
+    wrong, so a rebuild replays them against the untouched parse rather than
+    reading the PDF again.  Because the parse is never modified, rebuilding
+    twice gives the same book as rebuilding once.
+    """
+    settings = settings or ConversionSettings()
+    document = (
+        Document.from_dict(parsed) if isinstance(parsed, dict) else copy.deepcopy(parsed)
+    )
+    if corrections is not None and not corrections.is_empty:
+        if progress:
+            progress("applying corrections")
+        document = apply_corrections(document, corrections)
+
+    result = convert(
+        pdf_path, out_path, settings, progress=progress, document=document
+    )
+    # The parse the corrections were made against has to stay available for
+    # the next rebuild, since convert() only records it when it parses.
+    result.parsed = parsed if isinstance(parsed, dict) else parsed.to_dict()
+    return result
 
 
 def output_name_for(doc: Document) -> str:

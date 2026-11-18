@@ -285,3 +285,46 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 .pill.gone { border-color: var(--dropped); color: var(--dropped); }
 .star { border: none; background: none; font-size: 1rem; padding: 0 0.2rem; cursor: pointer; color: var(--muted); }
 .star.on { color: var(--warn); }
+
+/* ------------------------------------------------- correcting the parse */
+.compare-wrap { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+.editbar {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.45rem 0.8rem;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+    flex-wrap: wrap;
+}
+.editbar #edit-summary { flex: 1; min-width: 8rem; }
+.editbar button[disabled] { opacity: 0.45; cursor: default; }
+.editbar button[disabled]:hover { border-color: var(--line); color: var(--ink); }
+#draw-toggle.on { border-color: var(--asset); color: var(--asset); font-weight: 600; }
+#rebuild:not([disabled]) { border-color: var(--ok); color: var(--ok); font-weight: 600; }
+
+/* while drawing, the page is a canvas */
+.pagebox.drawing { cursor: crosshair; }
+.pagebox.drawing img { user-select: none; }
+.rubber {
+    position: absolute;
+    border: 2px dashed var(--asset);
+    background: rgba(160, 67, 155, 0.15);
+    pointer-events: none;
+}
+.bx.drawn { border-color: var(--asset); border-style: dashed; background: rgba(160, 67, 155, 0.18); }
+
+/* per-block controls in the extracted pane */
+.blk { position: relative; }
+.blk-actions { display: flex; gap: 0.25rem; margin-top: 0.3rem; }
+.blk-actions button {
+    font-size: 0.72rem;
+    padding: 0.1rem 0.4rem;
+    line-height: 1.4;
+}
+.blk.marked-out { opacity: 0.45; }
+.blk.marked-out .kind::after { content: " \2014 will be left out"; color: var(--dropped); }
+.blk.marked-in { border-left-color: var(--ok); }
+.blk.marked-in .kind::after { content: " \2014 will be brought back"; color: var(--ok); }
+.blk.moved { border-left-color: var(--asset); }

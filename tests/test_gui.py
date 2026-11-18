@@ -396,3 +396,103 @@ def test_sending_does_not_mark_as_sent_by_itself(client, job, monkeypatch):
         if e["id"] == job["entry_id"]
     )
     assert entry["is_sent"] is False
+
+
+# --------------------------------------------------------------------------
+# correcting the parse by hand
+# --------------------------------------------------------------------------
+
+
+def wait_for(client, job_id: str, timeout: float = 60.0) -> dict:
+    import time
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        status = client.get(f"/api/jobs/{job_id}").json()
+        if status["status"] in ("done", "failed"):
+            return status
+        time.sleep(0.1)
+    raise AssertionError("the job never finished")
+
+
+def test_review_hands_out_ids_for_every_block(client, job):
+    data = client.get(f"/api/jobs/{job['id']}/review").json()
+    for page in data["pages"]:
+        for kept in page["kept"]:
+            assert kept["id"].startswith(("blk-", "restored-"))
+        for dropped in page["dropped"]:
+            assert dropped["id"].startswith("drop-")
+
+
+def test_a_finished_job_can_be_rebuilt(client, job):
+    assert client.get(f"/api/jobs/{job['id']}").json()["can_rebuild"] is True
+
+
+def test_rebuilding_without_corrections_keeps_the_book(client, job):
+    before = client.get(f"/api/jobs/{job['id']}").json()
+    client.post(f"/api/jobs/{job['id']}/rebuild", json={"corrections": {}})
+    after = wait_for(client, job["id"])
+    assert after["status"] == "done"
+    assert after["build"]["references"] == before["build"]["references"]
+    assert after["rebuilds"] >= 1
+
+
+def test_rebuilding_removes_a_block_from_the_book(client, job):
+    review = client.get(f"/api/jobs/{job['id']}/review").json()
+    victim = next(
+        kept
+        for page in review["pages"]
+        for kept in page["kept"]
+        if kept["type"] == "paragraph" and len(kept["text"]) > 30
+    )
+    client.post(
+        f"/api/jobs/{job['id']}/rebuild",
+        json={"corrections": {"removed": [victim["id"]]}},
+    )
+    assert wait_for(client, job["id"])["status"] == "done"
+
+    after = client.get(f"/api/jobs/{job['id']}/review").json()
+    texts = [k["text"] for p in after["pages"] for k in p["kept"]]
+    assert victim["text"] not in texts
+    assert after["corrections"]["removed"] == [victim["id"]]
+
+
+def test_a_drawn_region_becomes_a_figure(client, job):
+    before = client.get(f"/api/jobs/{job['id']}").json()["build"]["figures"]
+    client.post(
+        f"/api/jobs/{job['id']}/rebuild",
+        json={
+            "corrections": {
+                "regions": [
+                    {
+                        "page": 1,
+                        "bbox": [80, 80, 500, 330],
+                        "caption": "Drawn in the review view.",
+                    }
+                ]
+            }
+        },
+    )
+    after = wait_for(client, job["id"])
+    assert after["status"] == "done"
+    assert after["build"]["figures"] == before + 1
+
+
+def test_corrections_replace_rather_than_accumulate(client, job):
+    """Each rebuild starts from the untouched parse."""
+    review = client.get(f"/api/jobs/{job['id']}/review").json()
+    first = next(k["id"] for p in review["pages"] for k in p["kept"])
+
+    client.post(f"/api/jobs/{job['id']}/rebuild",
+                json={"corrections": {"removed": [first]}})
+    wait_for(client, job["id"])
+    client.post(f"/api/jobs/{job['id']}/rebuild", json={"corrections": {}})
+    restored = wait_for(client, job["id"])
+
+    after = client.get(f"/api/jobs/{job['id']}/review").json()
+    assert any(k["id"] == first for p in after["pages"] for k in p["kept"])
+    assert restored["corrections"]["removed"] == []
+
+
+def test_rebuilding_an_unknown_job_is_a_404(client):
+    assert client.post("/api/jobs/nope/rebuild", json={}).status_code == 404

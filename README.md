@@ -69,6 +69,29 @@ so checking a paper takes a glance instead of a full read. Unresolved
 references are listed there too — usually supplementary figures that live in
 a separate file.
 
+The review view is also where you correct the parse. Layout parsing is
+heuristic, and some of its mistakes are obvious to a reader and invisible to
+a heuristic, so rather than pile on special cases paper2ink lets you say what
+is wrong:
+
+- **Leave out** takes a block out of the running text — a page footer the
+  running-head detection missed, say.
+- **Bring into the text** restores a block that was dropped, which is the fix
+  for a tinted text box that the layout heuristics read as a figure.
+- **↑ ↓** move a block earlier or later in the reading order.
+- **Draw a figure region** turns a rectangle you drag on the page into a
+  cropped figure, for the ones that were never recognised. Start the caption
+  with "Figure 7" or "Table 2" to give it that number; otherwise it gets its
+  own number space (`fig-m1`) so it cannot collide with a parsed one.
+
+**Rebuild the book** then applies them. The corrections are a declarative
+overlay on the parse, not an edit of it: they are replayed against the
+untouched parse every time, so rebuilding twice gives the same book as
+rebuilding once, and *Discard changes* really does go back to what the parser
+said. Rebuilding skips parsing — the slow part — so it takes seconds even
+with Docling. The corrections belong to that conversion; converting the same
+PDF again starts from the parser's own reading.
+
 **Library** is the shelf of everything converted so far, kept in a small
 SQLite file. Each row carries the metadata paper2ink pulled out — author,
 year, journal, pages, figures, references — so the shelf can be searched and
@@ -307,6 +330,7 @@ src/paper2ink/
   cleanup.py        # hyphenation, running heads, boilerplate, paragraphs
   bibliography.py   # reference-list extraction shared by the backends
   settings.py       # user settings the GUI writes back
+  corrections.py    # manual fixes replayed against the parse
   library.py        # the shelf: one SQLite row per conversion
   assets.py         # crops, grayscale, cover, debug overlay
   refs.py           # reference detection and linking

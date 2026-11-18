@@ -293,6 +293,17 @@ async function loadReview(jobId) {
         return;
     }
     state.review = data;
+    state.corrections = {
+        removed: [], restored: [], regions: [], order: {},
+        ...(data.corrections || {}),
+    };
+    // The server keys reordering by page number; JSON turned those into
+    // strings on the way out.
+    state.corrections.order = Object.fromEntries(
+        Object.entries(state.corrections.order || {}).map(([page, ids]) => [
+            Number(page), ids,
+        ])
+    );
 
     renderFindings(data);
 
@@ -368,8 +379,9 @@ function showPage(number) {
     image.src = `/api/jobs/${state.jobId}/page/${number}`;
     image.onload = () => drawBoxes(number);
 
-    const page = data.pages.find((candidate) => candidate.number === number);
-    renderExtracted(page);
+    // refreshEdits paints the block list and the overlay together, so the
+    // pending corrections are always reflected in both.
+    refreshEdits();
 }
 
 function drawBoxes(number) {
@@ -387,6 +399,9 @@ function drawBoxes(number) {
 
     const scaleX = image.width / size[0];
     const scaleY = image.height / size[1];
+    // Remembered so a rectangle drawn in screen pixels can be turned back
+    // into the PDF points the cropper works in.
+    state.scale = { x: scaleX, y: scaleY, width: image.width, height: image.height };
     const page = data.pages.find((candidate) => candidate.number === number);
     if (!page) return;
 
@@ -407,6 +422,12 @@ function drawBoxes(number) {
     };
 
     page.assets.forEach((asset) => place(asset.bbox, "asset", asset.label));
+    corrections().regions
+        .filter((region) => region.page === number)
+        .forEach((region, index) =>
+            place(region.bbox, "drawn", `drawn: ${region.caption || "figure"}`,
+                  "r" + index)
+        );
     page.kept.forEach((block, index) =>
         place(block.bbox, "kept", `${block.type}: ${block.text.slice(0, 80)}`, "k" + index)
     );
@@ -435,10 +456,13 @@ function renderExtracted(page) {
         host.innerHTML = '<p class="empty">Nothing was extracted from this page.</p>';
         return;
     }
+    const edits = corrections();
 
     page.kept.forEach((block, index) => {
         const div = document.createElement("div");
         div.className = "blk";
+        if (edits.removed.includes(block.id)) div.classList.add("marked-out");
+        if ((edits.order[page.number] || []).length) div.classList.add("moved");
         div.dataset.key = "k" + index;
         const kind = document.createElement("div");
         kind.className = "kind";
@@ -446,12 +470,30 @@ function renderExtracted(page) {
         const text = document.createElement("p");
         text.textContent = block.text;
         div.append(kind, text);
+
+        const actions = document.createElement("div");
+        actions.className = "blk-actions";
+        const out = edits.removed.includes(block.id);
+        actions.appendChild(
+            makeButton(out ? "Keep after all" : "Leave out", () => {
+                toggle(edits.removed, block.id);
+                refreshEdits();
+            })
+        );
+        actions.appendChild(
+            makeButton("↑", () => movePageBlock(page, index, -1), "Read earlier")
+        );
+        actions.appendChild(
+            makeButton("↓", () => movePageBlock(page, index, 1), "Read later")
+        );
+        div.appendChild(actions);
         host.appendChild(div);
     });
 
     page.dropped.forEach((drop, index) => {
         const div = document.createElement("div");
         div.className = "blk drop";
+        if (edits.restored.includes(drop.id)) div.classList.add("marked-in");
         div.dataset.key = "d" + index;
         const kind = document.createElement("div");
         kind.className = "kind";
@@ -461,9 +503,207 @@ function renderExtracted(page) {
         const text = document.createElement("p");
         text.textContent = drop.text;
         div.append(kind, text);
+
+        const actions = document.createElement("div");
+        actions.className = "blk-actions";
+        const back = edits.restored.includes(drop.id);
+        actions.appendChild(
+            makeButton(back ? "Leave out again" : "Bring into the text", () => {
+                toggle(edits.restored, drop.id);
+                refreshEdits();
+            })
+        );
+        div.appendChild(actions);
         host.appendChild(div);
     });
 }
+
+/* ------------------------------------------------- correcting the parse */
+
+/* The corrections are a plain overlay on the parse: the server replays
+ * them against the untouched parse on every rebuild, so nothing here
+ * compounds and "discard" really goes back to what the parser said. */
+function corrections() {
+    if (!state.corrections) {
+        state.corrections = { removed: [], restored: [], regions: [], order: {} };
+    }
+    return state.corrections;
+}
+
+function toggle(list, value) {
+    const at = list.indexOf(value);
+    if (at === -1) list.push(value);
+    else list.splice(at, 1);
+}
+
+function countEdits() {
+    const edits = corrections();
+    return (
+        edits.removed.length +
+        edits.restored.length +
+        edits.regions.length +
+        Object.keys(edits.order).length
+    );
+}
+
+function refreshEdits() {
+    const total = countEdits();
+    const edits = corrections();
+    const parts = [];
+    if (edits.removed.length) parts.push(`${edits.removed.length} left out`);
+    if (edits.restored.length) parts.push(`${edits.restored.length} brought back`);
+    if (edits.regions.length) parts.push(`${edits.regions.length} drawn`);
+    if (Object.keys(edits.order).length)
+        parts.push(`${Object.keys(edits.order).length} page(s) reordered`);
+    $("edit-summary").textContent = total ? parts.join(", ") : "no changes";
+    $("rebuild").disabled = total === 0;
+    $("reset-corrections").disabled = total === 0;
+
+    const page = state.review.pages.find((p) => p.number === state.page);
+    renderExtracted(page);
+    drawBoxes(state.page);
+}
+
+function movePageBlock(page, index, direction) {
+    const edits = corrections();
+    const ids = (edits.order[page.number] || page.kept.map((block) => block.id)).slice();
+    const target = index + direction;
+    if (target < 0 || target >= ids.length) return;
+    [ids[index], ids[target]] = [ids[target], ids[index]];
+    edits.order[page.number] = ids;
+    // Mirror the move in the data we are showing, so the list reorders too.
+    const moved = page.kept.splice(index, 1)[0];
+    page.kept.splice(target, 0, moved);
+    refreshEdits();
+}
+
+$("reset-corrections").addEventListener("click", () => {
+    state.corrections = { removed: [], restored: [], regions: [], order: {} };
+    loadReview(state.jobId);
+});
+
+$("rebuild").addEventListener("click", async () => {
+    const button = $("rebuild");
+    button.disabled = true;
+    $("edit-summary").textContent = "rebuilding…";
+    try {
+        await postJSON(`/api/jobs/${state.jobId}/rebuild`, {
+            corrections: corrections(),
+        });
+    } catch (error) {
+        $("edit-summary").textContent = String(error.message || error);
+        button.disabled = false;
+        return;
+    }
+    await waitForJob(state.jobId);
+    await loadReview(state.jobId);
+    await loadChapters(state.jobId);
+    loadShelf();
+});
+
+async function waitForJob(jobId) {
+    for (let tries = 0; tries < 900; tries++) {
+        let job;
+        try {
+            job = await (await fetch(`/api/jobs/${jobId}`)).json();
+        } catch (_) {
+            return;
+        }
+        if (job.status === "done" || job.status === "failed") {
+            state.jobs.set(job.id, job);
+            renderJobs();
+            if (job.status === "failed") {
+                $("edit-summary").textContent = job.error || "rebuild failed";
+            }
+            return;
+        }
+        $("edit-summary").textContent = job.message || "working…";
+        await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+}
+
+/* ------------------------------------------------- drawing a region */
+
+const drawToggle = $("draw-toggle");
+let drawing = false;
+
+drawToggle.addEventListener("click", () => {
+    drawing = !drawing;
+    drawToggle.classList.toggle("on", drawing);
+    $("pagebox").classList.toggle("drawing", drawing);
+    drawToggle.textContent = drawing ? "Stop drawing" : "Draw a figure region";
+});
+
+(function enableDrawing() {
+    const box = $("pagebox");
+    let start = null;
+    let rubber = null;
+
+    const pointIn = (event) => {
+        const image = $("pageimg");
+        const rect = image.getBoundingClientRect();
+        return {
+            x: Math.min(Math.max(event.clientX - rect.left, 0), rect.width),
+            y: Math.min(Math.max(event.clientY - rect.top, 0), rect.height),
+        };
+    };
+
+    box.addEventListener("mousedown", (event) => {
+        if (!drawing || event.button !== 0) return;
+        event.preventDefault();
+        start = pointIn(event);
+        rubber = document.createElement("div");
+        rubber.className = "rubber";
+        $("boxes").appendChild(rubber);
+    });
+
+    box.addEventListener("mousemove", (event) => {
+        if (!start || !rubber) return;
+        const now = pointIn(event);
+        rubber.style.left = Math.min(start.x, now.x) + "px";
+        rubber.style.top = Math.min(start.y, now.y) + "px";
+        rubber.style.width = Math.abs(now.x - start.x) + "px";
+        rubber.style.height = Math.abs(now.y - start.y) + "px";
+    });
+
+    box.addEventListener("mouseup", (event) => {
+        if (!start || !rubber) return;
+        const end = pointIn(event);
+        const from = start;
+        start = null;
+        rubber.remove();
+        rubber = null;
+
+        const scale = state.scale;
+        if (!scale) return;
+        const width = Math.abs(end.x - from.x);
+        const height = Math.abs(end.y - from.y);
+        if (width < 12 || height < 12) return;   // a stray click, not a drag
+
+        const caption = prompt(
+            "Caption for this figure (leave empty for none).\n" +
+            "Start with “Figure 7” or “Table 2” to give it that number."
+        );
+        if (caption === null) return;
+
+        const label = /^\s*(figure|fig\.?|table|scheme)\s*\d/i.test(caption)
+            ? caption
+            : "";
+        corrections().regions.push({
+            page: state.page,
+            bbox: [
+                Math.min(from.x, end.x) / scale.x,
+                Math.min(from.y, end.y) / scale.y,
+                Math.max(from.x, end.x) / scale.x,
+                Math.max(from.y, end.y) / scale.y,
+            ],
+            label,
+            caption: label ? caption.replace(/^[^.:|]*[.:|]\s*/, "") : caption,
+            kind: /^\s*table/i.test(caption) ? "table" : "figure",
+        });
+        refreshEdits();
+    });
+})();
 
 /* ------------------------------------------------------------ settings */
 
@@ -666,10 +906,11 @@ function shelfRow(entry) {
     return row;
 }
 
-function makeButton(label, handler) {
+function makeButton(label, handler, title) {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = label;
+    if (title) button.title = title;
     button.addEventListener("click", handler);
     return button;
 }

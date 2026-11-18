@@ -170,3 +170,104 @@ def test_keep_temp_is_reported(sample_pdf, tmp_path):
     )
     result = convert(sample_pdf, tmp_path / "b.epub", settings)
     assert any("temporary files kept" in w for w in result.warnings)
+
+
+# --------------------------------------------------------------------------
+# rebuilding with manual corrections
+# --------------------------------------------------------------------------
+
+
+def test_keep_parsed_hands_back_the_untouched_parse(sample_pdf, tmp_path):
+    settings = ConversionSettings(
+        parser="pymupdf", dpi=72, validate=False, keep_parsed=True
+    )
+    result = convert(sample_pdf, tmp_path / "a.epub", settings)
+    assert result.ok
+    assert result.parsed is not None
+    assert result.parsed["blocks"], "the parse should carry its blocks"
+
+
+def test_rebuild_without_corrections_matches_the_first_build(sample_pdf, tmp_path):
+    from paper2ink.pipeline import rebuild
+
+    settings = ConversionSettings(
+        parser="pymupdf", dpi=72, validate=False, keep_parsed=True
+    )
+    first = convert(sample_pdf, tmp_path / "first.epub", settings)
+    again = rebuild(first.parsed, sample_pdf, tmp_path / "again.epub", settings)
+    assert again.ok
+    assert again.build.chapters == first.build.chapters
+    assert again.build.references == first.build.references
+    assert again.build.links == first.build.links
+
+
+def test_rebuild_applies_a_removal(sample_pdf, tmp_path):
+    from paper2ink.corrections import Corrections
+    from paper2ink.pipeline import rebuild
+
+    settings = ConversionSettings(
+        parser="pymupdf", dpi=72, validate=False, keep_parsed=True
+    )
+    first = convert(sample_pdf, tmp_path / "first.epub", settings)
+    victim = next(
+        b for b in first.parsed["blocks"] if b["type"] == "paragraph" and b["text"]
+    )
+
+    again = rebuild(
+        first.parsed,
+        sample_pdf,
+        tmp_path / "again.epub",
+        settings,
+        Corrections(removed=[victim["id"]]),
+    )
+    assert again.ok
+    remaining = [b.text for b in again.document.blocks]
+    assert victim["text"] not in remaining
+
+
+def test_rebuild_adds_a_drawn_region(sample_pdf, tmp_path):
+    from paper2ink.corrections import Corrections, Region
+    from paper2ink.pipeline import rebuild
+
+    settings = ConversionSettings(
+        parser="pymupdf", dpi=72, validate=False, keep_parsed=True
+    )
+    first = convert(sample_pdf, tmp_path / "first.epub", settings)
+    before = first.build.figures
+
+    again = rebuild(
+        first.parsed,
+        sample_pdf,
+        tmp_path / "again.epub",
+        settings,
+        Corrections(
+            regions=[
+                Region(page=1, bbox=[80, 80, 500, 330], caption="Drawn by hand.")
+            ]
+        ),
+    )
+    assert again.build.figures == before + 1
+    drawn = next(a for a in again.document.assets if a.key.endswith("m1"))
+    assert drawn.image_path, "the drawn region should have been cropped"
+    assert drawn.caption == "Drawn by hand."
+
+
+def test_rebuilding_does_not_consume_the_parse(sample_pdf, tmp_path):
+    """The parse must survive so the next rebuild starts from it again."""
+    from paper2ink.corrections import Corrections
+    from paper2ink.pipeline import rebuild
+
+    settings = ConversionSettings(
+        parser="pymupdf", dpi=72, validate=False, keep_parsed=True
+    )
+    first = convert(sample_pdf, tmp_path / "first.epub", settings)
+    count = len(first.parsed["blocks"])
+    victim = first.parsed["blocks"][0]["id"]
+
+    second = rebuild(first.parsed, sample_pdf, tmp_path / "b.epub", settings,
+                     Corrections(removed=[victim]))
+    assert len(second.parsed["blocks"]) == count
+
+    third = rebuild(second.parsed, sample_pdf, tmp_path / "c.epub", settings,
+                    Corrections())
+    assert len(third.document.blocks) >= len(second.document.blocks)
