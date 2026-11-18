@@ -415,8 +415,11 @@ function drawBoxes(number) {
         box.style.height = Math.max(2, (bbox[3] - bbox[1]) * scaleY) + "px";
         box.title = title;
         if (key !== undefined) {
+            box.dataset.key = key;
             box.addEventListener("mouseenter", () => highlight(key, true));
             box.addEventListener("mouseleave", () => highlight(key, false));
+            box.addEventListener("click", () => select(key));
+            if (state.selected === key) box.classList.add("hot");
         }
         host.appendChild(box);
     };
@@ -442,11 +445,29 @@ function drawBoxes(number) {
 }
 
 function highlight(key, on) {
-    const element = document.querySelector(`[data-key="${key}"]`);
+    const element = document.querySelector(`#extracted [data-key="${key}"]`);
     if (element) {
         element.classList.toggle("hot", on);
         if (on) element.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
+}
+
+/* Clicking a block in either pane selects it in both, so there is always a
+ * visible answer to "which one did I just press?". */
+function select(key) {
+    state.selected = state.selected === key ? null : key;
+    document
+        .querySelectorAll("#extracted .blk.hot, #boxes .bx.hot")
+        .forEach((element) => element.classList.remove("hot"));
+    if (!state.selected) return;
+    document
+        .querySelectorAll(`[data-key="${state.selected}"]`)
+        .forEach((element) => {
+            element.classList.add("hot");
+            if (element.closest("#extracted")) {
+                element.scrollIntoView({ block: "nearest", behavior: "smooth" });
+            }
+        });
 }
 
 function renderExtracted(page) {
@@ -470,6 +491,10 @@ function renderExtracted(page) {
         const text = document.createElement("p");
         text.textContent = block.text;
         div.append(kind, text);
+        if (state.selected === div.dataset.key) div.classList.add("hot");
+        div.addEventListener("click", (event) => {
+            if (!event.target.closest("button")) select(div.dataset.key);
+        });
 
         const actions = document.createElement("div");
         actions.className = "blk-actions";
@@ -503,6 +528,10 @@ function renderExtracted(page) {
         const text = document.createElement("p");
         text.textContent = drop.text;
         div.append(kind, text);
+        if (state.selected === div.dataset.key) div.classList.add("hot");
+        div.addEventListener("click", (event) => {
+            if (!event.target.closest("button")) select(div.dataset.key);
+        });
 
         const actions = document.createElement("div");
         actions.className = "blk-actions";
@@ -559,8 +588,13 @@ function refreshEdits() {
     $("rebuild").disabled = total === 0;
     $("reset-corrections").disabled = total === 0;
 
+    // Redrawing the list would otherwise throw the reader back to the top
+    // of the page, which reads as "nothing happened".
+    const list = $("extracted");
+    const offset = list.scrollTop;
     const page = state.review.pages.find((p) => p.number === state.page);
     renderExtracted(page);
+    list.scrollTop = offset;
     drawBoxes(state.page);
 }
 

@@ -163,8 +163,8 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 .findings .good { color: var(--ok); }
 .findings .flagged { color: var(--dropped); cursor: pointer; text-decoration: underline; }
 
-.compare { flex: 1; display: flex; min-width: 0; }
-.pane { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.compare { flex: 1; display: flex; min-width: 0; min-height: 0; }
+.pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .pdf-pane { border-right: 1px solid var(--line); }
 .pane-head {
     display: flex;
@@ -287,7 +287,17 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 .star.on { color: var(--warn); }
 
 /* ------------------------------------------------- correcting the parse */
-.compare-wrap { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+/* A flex child defaults to min-height:auto, which lets it grow to its
+   content instead of shrinking to the parent.  Every link in the chain
+   from the bounded .tab-panel down to the scrolling panes has to say
+   min-height:0, or the panes stop scrolling. */
+.compare-wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+}
 
 .editbar {
     display: flex;
@@ -328,3 +338,8 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 .blk.marked-in { border-left-color: var(--ok); }
 .blk.marked-in .kind::after { content: " \2014 will be brought back"; color: var(--ok); }
 .blk.moved { border-left-color: var(--asset); }
+
+/* The selected block is answered in both panes at once. */
+.bx.hot { background: rgba(31, 95, 139, 0.3); border-width: 3px; }
+.blk.hot { background: rgba(31, 95, 139, 0.14); outline: 1px solid var(--kept); }
+.blk { cursor: pointer; }
