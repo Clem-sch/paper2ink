@@ -78,6 +78,13 @@ is wrong:
   running-head detection missed, say.
 - **Bring into the text** restores a block that was dropped, which is the fix
   for a tinted text box that the layout heuristics read as a figure.
+- **Edit text** corrects what was read off the page. Column layouts merge a
+  tinted box with the caption beside it often enough that fixing the text by
+  hand is the only sensible repair. The block turns into a text box in place
+  — Ctrl+Enter saves, Escape cancels — and *Undo edit* returns to what the
+  parser read. Clearing the box does nothing: leaving a block out has its own
+  button, and losing a paragraph to a stray select-all would be the worse
+  surprise. A dropped block offers this too, once it is marked to come back.
 - **↑ ↓** move a block earlier or later in the reading order.
 - **Draw a figure region** turns a rectangle you drag on the page into a
   cropped figure, for the ones that were never recognised. Start the caption

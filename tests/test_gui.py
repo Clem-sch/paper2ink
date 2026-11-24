@@ -570,3 +570,80 @@ def test_picked_up_text_reaches_the_rebuilt_book(client, job):
         for c in chapters
     )
     assert "Picked up by hand in the review view." in body
+
+
+# --------------------------------------------------------------------------
+# correcting the text that was read out of the page
+# --------------------------------------------------------------------------
+
+
+def test_edited_text_reaches_the_rebuilt_book(client, job):
+    """Parsing merges a tinted box with a neighbouring caption; the fix is
+    to correct the text by hand."""
+    review = client.get(f"/api/jobs/{job['id']}/review").json()
+    victim = next(
+        kept
+        for page in review["pages"]
+        for kept in page["kept"]
+        if kept["type"] == "paragraph" and len(kept["text"]) > 30
+    )
+    fixed = "Corrected by hand in the review view."
+
+    client.post(
+        f"/api/jobs/{job['id']}/rebuild",
+        json={"corrections": {"edited": {victim["id"]: fixed}}},
+    )
+    assert wait_for(client, job["id"])["status"] == "done"
+
+    after = client.get(f"/api/jobs/{job['id']}/review").json()
+    texts = [k["text"] for p in after["pages"] for k in p["kept"]]
+    assert fixed in texts
+    assert victim["text"] not in texts
+    assert after["corrections"]["edited"] == {victim["id"]: fixed}
+
+    chapters = client.get(f"/api/jobs/{job['id']}/reader").json()["chapters"]
+    body = "".join(
+        client.get(f"/api/jobs/{job['id']}/book/{c['href']}").text for c in chapters
+    )
+    assert fixed in body
+
+
+def test_a_restored_block_can_be_edited_on_the_way_back(client, job):
+    review = client.get(f"/api/jobs/{job['id']}/review").json()
+    dropped = next(
+        (d for page in review["pages"] for d in page["dropped"] if d["text"].strip()),
+        None,
+    )
+    if dropped is None:
+        pytest.skip("this sample drops nothing")
+
+    restored_id = dropped["id"].replace("drop-", "restored-")
+    fixed = "Brought back and tidied up."
+    client.post(
+        f"/api/jobs/{job['id']}/rebuild",
+        json={
+            "corrections": {
+                "restored": [dropped["id"]],
+                "edited": {restored_id: fixed},
+            }
+        },
+    )
+    assert wait_for(client, job["id"])["status"] == "done"
+
+    after = client.get(f"/api/jobs/{job['id']}/review").json()
+    texts = [k["text"] for p in after["pages"] for k in p["kept"]]
+    assert fixed in texts
+
+
+def test_an_empty_edit_does_not_delete_the_block(client, job):
+    review = client.get(f"/api/jobs/{job['id']}/review").json()
+    victim = next(k for p in review["pages"] for k in p["kept"] if k["text"].strip())
+
+    client.post(
+        f"/api/jobs/{job['id']}/rebuild",
+        json={"corrections": {"edited": {victim["id"]: "   "}}},
+    )
+    assert wait_for(client, job["id"])["status"] == "done"
+    after = client.get(f"/api/jobs/{job['id']}/review").json()
+    texts = [k["text"] for p in after["pages"] for k in p["kept"]]
+    assert victim["text"] in texts

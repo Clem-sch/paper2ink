@@ -294,7 +294,8 @@ async function loadReview(jobId) {
     }
     state.review = data;
     state.corrections = {
-        removed: [], restored: [], regions: [], text_blocks: [], order: {},
+        removed: [], restored: [], regions: [], text_blocks: [],
+        edited: {}, order: {},
         ...(data.corrections || {}),
     };
     // The server keys reordering by page number; JSON turned those into
@@ -494,12 +495,14 @@ function renderExtracted(page) {
         const kind = document.createElement("div");
         kind.className = "kind";
         kind.textContent = block.level ? `${block.type} ${block.level}` : block.type;
+        const shown = edits.edited[block.id] ?? block.text;
         const text = document.createElement("p");
-        text.textContent = block.text;
+        text.textContent = shown;
         div.append(kind, text);
+        if (edits.edited[block.id] !== undefined) div.classList.add("edited");
         if (state.selected === div.dataset.key) div.classList.add("hot");
         div.addEventListener("click", (event) => {
-            if (!event.target.closest("button")) select(div.dataset.key);
+            if (!event.target.closest("button, textarea")) select(div.dataset.key);
         });
 
         const actions = document.createElement("div");
@@ -511,6 +514,18 @@ function renderExtracted(page) {
                 refreshEdits();
             })
         );
+        actions.appendChild(
+            makeButton("Edit text", () => editText(div, block.id, shown),
+                       "Correct the text that was read out of the page")
+        );
+        if (edits.edited[block.id] !== undefined) {
+            actions.appendChild(
+                makeButton("Undo edit", () => {
+                    delete edits.edited[block.id];
+                    refreshEdits();
+                }, "Go back to what the parser read")
+            );
+        }
         actions.appendChild(
             makeButton("↑", () => movePageBlock(page, index, -1), "Read earlier")
         );
@@ -531,12 +546,17 @@ function renderExtracted(page) {
         kind.textContent = drop.suspicious
             ? `dropped — ${drop.reason} — check this`
             : `dropped — ${drop.reason}`;
+        // A restored block is rebuilt under its own id, so an edit for it
+        // is filed under that name from the start.
+        const restoredId = drop.id.replace(/^drop-/, "restored-");
+        const shown = edits.edited[restoredId] ?? drop.text;
         const text = document.createElement("p");
-        text.textContent = drop.text;
+        text.textContent = shown;
         div.append(kind, text);
+        if (edits.edited[restoredId] !== undefined) div.classList.add("edited");
         if (state.selected === div.dataset.key) div.classList.add("hot");
         div.addEventListener("click", (event) => {
-            if (!event.target.closest("button")) select(div.dataset.key);
+            if (!event.target.closest("button, textarea")) select(div.dataset.key);
         });
 
         const actions = document.createElement("div");
@@ -545,9 +565,26 @@ function renderExtracted(page) {
         actions.appendChild(
             makeButton(back ? "Leave out again" : "Bring into the text", () => {
                 toggle(edits.restored, drop.id);
+                if (!edits.restored.includes(drop.id)) delete edits.edited[restoredId];
                 refreshEdits();
             })
         );
+        if (back) {
+            // Only worth offering once it is coming back: an edit to a
+            // block that stays out would do nothing.
+            actions.appendChild(
+                makeButton("Edit text", () => editText(div, restoredId, shown),
+                           "Correct the text before it goes back in")
+            );
+            if (edits.edited[restoredId] !== undefined) {
+                actions.appendChild(
+                    makeButton("Undo edit", () => {
+                        delete edits.edited[restoredId];
+                        refreshEdits();
+                    })
+                );
+            }
+        }
         div.appendChild(actions);
         host.appendChild(div);
     });
@@ -561,7 +598,8 @@ function renderExtracted(page) {
 function corrections() {
     if (!state.corrections) {
         state.corrections = {
-            removed: [], restored: [], regions: [], text_blocks: [], order: {},
+            removed: [], restored: [], regions: [], text_blocks: [],
+        edited: {}, order: {},
         };
     }
     return state.corrections;
@@ -580,6 +618,7 @@ function countEdits() {
         edits.restored.length +
         edits.regions.length +
         edits.text_blocks.length +
+        Object.keys(edits.edited).length +
         Object.keys(edits.order).length
     );
 }
@@ -593,6 +632,8 @@ function refreshEdits() {
     if (edits.regions.length) parts.push(`${edits.regions.length} drawn`);
     if (edits.text_blocks.length)
         parts.push(`${edits.text_blocks.length} text picked up`);
+    const editedCount = Object.keys(edits.edited).length;
+    if (editedCount) parts.push(`${editedCount} text corrected`);
     if (Object.keys(edits.order).length)
         parts.push(`${Object.keys(edits.order).length} page(s) reordered`);
     $("edit-summary").textContent = total ? parts.join(", ") : "no changes";
@@ -607,6 +648,46 @@ function refreshEdits() {
     renderExtracted(page);
     list.scrollTop = offset;
     drawBoxes(state.page);
+}
+
+/* Correcting a paragraph needs room, so the text turns into a box in
+ * place rather than going through prompt(), which is a single line in
+ * most browsers and unusable for anything longer than a caption. */
+function editText(container, blockId, current) {
+    if (container.querySelector("textarea")) return;
+    const paragraph = container.querySelector("p");
+    const actions = container.querySelector(".blk-actions");
+
+    const field = document.createElement("textarea");
+    field.className = "edit-field";
+    field.value = current;
+    field.rows = Math.min(14, Math.max(3, Math.ceil(current.length / 60)));
+
+    const bar = document.createElement("div");
+    bar.className = "blk-actions";
+    const save = makeButton("Save", () => {
+        const value = field.value.trim();
+        if (!value) {
+            // Leaving a block out has its own button; a cleared box here
+            // would be an easy way to lose a paragraph by accident.
+            field.focus();
+            return;
+        }
+        if (value === current) delete corrections().edited[blockId];
+        else corrections().edited[blockId] = value;
+        refreshEdits();
+    });
+    bar.append(save, makeButton("Cancel", () => refreshEdits()));
+
+    paragraph.replaceWith(field);
+    actions.replaceWith(bar);
+    field.focus();
+    field.setSelectionRange(field.value.length, field.value.length);
+
+    field.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") refreshEdits();
+        if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) save.click();
+    });
 }
 
 function movePageBlock(page, index, direction) {
@@ -624,7 +705,8 @@ function movePageBlock(page, index, direction) {
 
 $("reset-corrections").addEventListener("click", () => {
     state.corrections = {
-        removed: [], restored: [], regions: [], text_blocks: [], order: {},
+        removed: [], restored: [], regions: [], text_blocks: [],
+        edited: {}, order: {},
     };
     loadReview(state.jobId);
 });

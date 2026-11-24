@@ -341,3 +341,94 @@ def test_text_blocks_without_text_are_dropped_on_the_way_in():
         {"text_blocks": [{"page": 1, "bbox": [1, 2, 3, 4]}]}
     )
     assert corrections.text_blocks == []
+
+
+# --------------------------------------------------------------------------
+# correcting the text itself
+# --------------------------------------------------------------------------
+
+
+def test_editing_a_blocks_text(doc):
+    """Parsing merges a tinted box with the caption next to it often
+    enough that fixing the text by hand is the only sensible repair."""
+    result = apply_corrections(doc, Corrections(edited={"b1": "Corrected text."}))
+    assert next(b for b in result.blocks if b.id == "b1").text == "Corrected text."
+
+
+def test_editing_leaves_the_other_blocks_alone(doc):
+    result = apply_corrections(doc, Corrections(edited={"b1": "New."}))
+    assert next(b for b in result.blocks if b.id == "b2").text == "Second paragraph."
+
+
+def test_editing_keeps_the_type_and_the_place(doc):
+    doc.blocks[1].type = "heading"
+    doc.blocks[1].level = 2
+    result = apply_corrections(doc, Corrections(edited={"b2": "2. Results"}))
+    edited = next(b for b in result.blocks if b.id == "b2")
+    assert edited.type == "heading" and edited.level == 2
+    assert [b.id for b in result.blocks] == ["b1", "b2", "b3"]
+
+
+def test_an_empty_edit_is_ignored(doc):
+    """Leaving a block out has its own button; a cleared box must not
+    silently delete a paragraph."""
+    result = apply_corrections(doc, Corrections(edited={"b1": "   "}))
+    assert next(b for b in result.blocks if b.id == "b1").text == "First paragraph."
+
+
+def test_editing_an_unknown_block_is_harmless(doc):
+    result = apply_corrections(doc, Corrections(edited={"nope": "x"}))
+    assert len(result.blocks) == 3
+
+
+def test_a_restored_block_can_be_edited_in_the_same_pass(doc):
+    """Edits run after restoring, so the ids they name already exist."""
+    result = apply_corrections(
+        doc,
+        Corrections(
+            restored=[drop_id(0)],
+            edited={"restored-0000": "Box 1. Cleaned up by hand."},
+        ),
+    )
+    texts = [b.text for b in result.blocks]
+    assert "Box 1. Cleaned up by hand." in texts
+
+
+def test_a_picked_up_block_can_be_edited_in_the_same_pass(doc):
+    from paper2ink.corrections import TextBlock
+
+    result = apply_corrections(
+        doc,
+        Corrections(
+            text_blocks=[
+                TextBlock(page=0, bbox=[0, 0, 10, 10], text="raw scan")
+            ],
+            edited={"added-0000": "tidied up"},
+        ),
+    )
+    assert any(b.text == "tidied up" for b in result.blocks)
+
+
+def test_editing_a_removed_block_does_nothing(doc):
+    result = apply_corrections(
+        doc, Corrections(removed=["b1"], edited={"b1": "too late"})
+    )
+    assert all(b.text != "too late" for b in result.blocks)
+
+
+def test_edits_survive_the_round_trip():
+    corrections = Corrections(edited={"b4": "fixed"})
+    restored = Corrections.from_dict(corrections.to_dict())
+    assert restored.edited == {"b4": "fixed"}
+    assert not restored.is_empty
+
+
+def test_empty_edits_are_dropped_on_the_way_in():
+    assert Corrections.from_dict({"edited": {"b1": "  "}}).edited == {}
+
+
+def test_applying_edits_twice_gives_the_same_result(doc):
+    corrections = Corrections(edited={"b1": "Once."})
+    once = apply_corrections(doc, corrections)
+    twice = apply_corrections(doc, corrections)
+    assert [b.text for b in once.blocks] == [b.text for b in twice.blocks]

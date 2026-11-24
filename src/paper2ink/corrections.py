@@ -89,6 +89,10 @@ class Corrections:
     regions: list[Region] = field(default_factory=list)
     #: Text the reader picked up from a rectangle the parser skipped.
     text_blocks: list[TextBlock] = field(default_factory=list)
+    #: Block id -> the text the reader corrected it to.  Parsing merges a
+    #: tinted box with a neighbouring caption often enough that fixing the
+    #: text by hand is the only sensible repair.
+    edited: dict[str, str] = field(default_factory=dict)
     #: Page number -> block ids in the order the reader wants them read.
     order: dict[int, list[str]] = field(default_factory=dict)
 
@@ -99,6 +103,7 @@ class Corrections:
             or self.restored
             or self.regions
             or self.text_blocks
+            or self.edited
             or self.order
         )
 
@@ -137,11 +142,17 @@ class Corrections:
                 order[int(page)] = [str(block_id) for block_id in ids]
             except (TypeError, ValueError):
                 continue
+        edited = {
+            str(block_id): str(text)
+            for block_id, text in (raw.get("edited") or {}).items()
+            if str(text).strip()
+        }
         return cls(
             removed=[str(x) for x in raw.get("removed", [])],
             restored=[str(x) for x in raw.get("restored", [])],
             regions=regions,
             text_blocks=text_blocks,
+            edited=edited,
             order=order,
         )
 
@@ -161,6 +172,9 @@ def apply_corrections(document: Document, corrections: Corrections) -> Document:
     _remove(doc, corrections.removed)
     _add_regions(doc, corrections.regions)
     _add_text_blocks(doc, corrections.text_blocks)
+    # Last of the content changes, so a block that was restored or picked
+    # up can be corrected in the same pass.
+    _apply_edits(doc, corrections.edited)
     _reorder(doc, corrections.order)
     return doc
 
@@ -222,6 +236,21 @@ def _insert_in_reading_order(doc: Document, block: Block) -> None:
 
 #: Block types the reader may choose for a picked-up text region.
 TEXT_BLOCK_TYPES = ("paragraph", "heading", "caption", "footnote", "list_item")
+
+
+def _apply_edits(doc: Document, edited: dict[str, str]) -> None:
+    """Replace the text of blocks the reader corrected.
+
+    An empty correction is ignored rather than treated as a deletion: the
+    reader has a button for leaving a block out, and silently losing a
+    paragraph to a stray select-all would be the worse surprise.
+    """
+    if not edited:
+        return
+    for block in doc.blocks:
+        text = edited.get(block.id)
+        if text is not None and text.strip():
+            block.text = text.strip()
 
 
 def _add_text_blocks(doc: Document, text_blocks: list[TextBlock]) -> None:
